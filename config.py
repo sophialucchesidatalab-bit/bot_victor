@@ -3,7 +3,7 @@ import os
 # === Z-API ===
 ZAPI_INSTANCE = os.getenv("ZAPI_INSTANCE", "3F08645D62A8F15B3B63CA0B4A3FCD13")
 ZAPI_TOKEN    = os.getenv("ZAPI_TOKEN",    "BB8428EE82CF8EB91C2A62F3")
-ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE}/token/{ZAPI_TOKEN}/send-text"
+ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE}/token/{ZAPI_TOKEN}"
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
 # === ANTHROPIC ===
