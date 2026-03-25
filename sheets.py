@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+
 def _get_service():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
     if not creds_json:
@@ -15,6 +16,23 @@ def _get_service():
     creds_dict = json.loads(creds_json)
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds)
+
+
+def _proxima_linha_vazia(service) -> int:
+    """
+    Encontra a próxima linha vazia olhando APENAS a coluna A.
+    Isso evita o bug do append que considera colunas além de G
+    e desvia os dados para colunas erradas.
+    """
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SHEET_NAME}!A:A"
+    ).execute()
+    rows = result.get("values", [])
+    # rows é uma lista de listas — cada item é o valor da coluna A daquela linha
+    # len(rows) + 1 aponta para a linha logo após a última com conteúdo
+    return len(rows) + 1
+
 
 def buscar_estado(phone: str) -> dict | None:
     """Busca o registro do paciente na planilha pelo telefone."""
@@ -25,44 +43,56 @@ def buscar_estado(phone: str) -> dict | None:
             range=f"{SHEET_NAME}!A:G"
         ).execute()
         rows = result.get("values", [])
-        for i, row in enumerate(rows[1:], start=2):  # pula cabecalho
+        for i, row in enumerate(rows[1:], start=2):  # pula cabeçalho
             if row and row[0] == phone:
                 return {
                     "row_number": i,
-                    "phone":       row[0] if len(row) > 0 else "",
-                    "etapa":       row[1] if len(row) > 1 else "",
-                    "local":       row[2] if len(row) > 2 else "",
-                    "data":        row[3] if len(row) > 3 else "",
-                    "hora":        row[4] if len(row) > 4 else "",
-                    "nome":        row[5] if len(row) > 5 else "",
-                    "atualizado":  row[6] if len(row) > 6 else "",
+                    "phone":      row[0] if len(row) > 0 else "",
+                    "etapa":      row[1] if len(row) > 1 else "",
+                    "local":      row[2] if len(row) > 2 else "",
+                    "data":       row[3] if len(row) > 3 else "",
+                    "hora":       row[4] if len(row) > 4 else "",
+                    "nome":       row[5] if len(row) > 5 else "",
+                    "atualizado": row[6] if len(row) > 6 else "",
                 }
         return None
     except Exception as e:
         logger.error(f"Erro ao buscar estado para {phone}: {e}")
         return None
 
+
 def criar_registro(phone: str, nome: str, etapa: str) -> bool:
-    """Cria novo registro para um paciente novo."""
+    """
+    Cria novo registro para um paciente novo.
+    USA UPDATE em linha exata em vez de APPEND para evitar
+    deslocamento de colunas causado por dados em colunas além de G.
+    """
     from datetime import datetime
     try:
         service = _get_service()
         agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+        # Encontra a próxima linha vazia pela coluna A
+        linha = _proxima_linha_vazia(service)
+
         values = [[phone, etapa, "", "", "", nome, agora]]
-        service.spreadsheets().values().append(
+
+        service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"{SHEET_NAME}!A:G",
+            range=f"{SHEET_NAME}!A{linha}:G{linha}",
             valueInputOption="USER_ENTERED",
             body={"values": values}
         ).execute()
-        logger.info(f"Registro criado para {phone}")
+
+        logger.info(f"Registro criado para {phone} na linha {linha}")
         return True
     except Exception as e:
         logger.error(f"Erro ao criar registro para {phone}: {e}")
         return False
 
+
 def atualizar_estado(row_number: int, etapa: str = None, local: str = None,
-                      data: str = None, hora: str = None, nome: str = None) -> bool:
+                     data: str = None, hora: str = None, nome: str = None) -> bool:
     """Atualiza campos do registro do paciente."""
     from datetime import datetime
     try:
@@ -95,7 +125,7 @@ def atualizar_estado(row_number: int, etapa: str = None, local: str = None,
                 "range": f"{SHEET_NAME}!F{row_number}",
                 "values": [[nome]]
             })
-        # sempre atualiza timestamp
+        # Sempre atualiza timestamp
         atualizacoes.append({
             "range": f"{SHEET_NAME}!G{row_number}",
             "values": [[agora]]
