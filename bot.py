@@ -65,9 +65,9 @@ def processar_mensagem(phone: str, nome: str, texto: str):
 
     registro = buscar_estado(phone)
 
-    # PACIENTE NOVO
+    # ── PACIENTE NOVO ──────────────────────────────────────────────────────────
     if registro is None:
-        criar_registro(          # ✅ CORRIGIDO: apenas os 3 parâmetros que existem
+        criar_registro(          # ✅ CORRIGIDO: apenas os 3 parâmetros reais
             phone=phone,
             nome=nome,
             etapa=ESTADO_AGUARDA_OPCAO
@@ -75,14 +75,14 @@ def processar_mensagem(phone: str, nome: str, texto: str):
         enviar_mensagem(phone, msg.MENU_PRINCIPAL)
         return
 
-    etapa = registro.get("etapa", ESTADO_AGUARDA_OPCAO)
-    local = registro.get("local", "")
-    row = registro.get("row_number")
+    etapa      = registro.get("etapa", ESTADO_AGUARDA_OPCAO)
+    local      = registro.get("local", "")
+    row        = registro.get("row_number")
     nome_salvo = registro.get("nome", nome) or nome
 
     logger.info(f"[{phone}] etapa={etapa}")
 
-    # ATALHO: paciente pede endereço
+    # ── ATALHO: paciente pede endereço ────────────────────────────────────────
     if detectar_endereco(texto_norm) and local:
         if local == "Copacabana":
             enviar_mensagem(phone, msg.ENDERECO_COPA)
@@ -90,7 +90,7 @@ def processar_mensagem(phone: str, nome: str, texto: str):
             enviar_mensagem(phone, msg.ENDERECO_MEIER)
         return
 
-    # ETAPA 1 — MENU PRINCIPAL
+    # ── ETAPA 1 — MENU PRINCIPAL ──────────────────────────────────────────────
     if etapa == ESTADO_AGUARDA_OPCAO:
         if texto_norm in ["1", "1️⃣"]:
             atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
@@ -109,7 +109,7 @@ def processar_mensagem(phone: str, nome: str, texto: str):
         else:
             enviar_mensagem(phone, msg.MENU_PRINCIPAL)
 
-    # ETAPA 2 — SUBMENU
+    # ── ETAPA 2 — SUBMENU ─────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_SUBMENU:
         if texto_norm in ["1", "1️⃣"]:
             atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
@@ -127,53 +127,49 @@ def processar_mensagem(phone: str, nome: str, texto: str):
             enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
             enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
 
-    # ETAPA 3 — LOCAL
+    # ── ETAPA 3 — LOCAL ───────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_LOCAL:
         local_detectado = detectar_local(texto)
         if local_detectado:
-            atualizar_estado(
-                row,
-                etapa=ESTADO_AGUARDA_TURNO,
-                local=local_detectado
-            )
+            atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_detectado)
             enviar_mensagem(phone, msg.PERGUNTA_TURNO)
         else:
             enviar_mensagem(phone, msg.ERRO_LOCAL_INVALIDO)
 
-    # ETAPA 4 — TURNO
+    # ── ETAPA 4 — TURNO ───────────────────────────────────────────────────────
+    # Último passo do bot: coleta turno → notifica Victor → encerra automação
     elif etapa == ESTADO_AGUARDA_TURNO:
         turno = detectar_turno(texto) or texto.strip().capitalize()
 
-        atualizar_estado(
-            row,
-            etapa=ESTADO_ATENDIMENTO_HUMANO,
-            hora=turno
-        )
+        atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO, hora=turno)
 
         enviar_mensagem(phone, msg.ENCERRAMENTO_BOT)
         enviar_mensagem(
             VICTOR_PHONE,
-            msg.notif_triagem(nome_salvo, phone, local, turno)
+            msg.notif_triagem(nome_salvo, phone, local, turno)   # ✅ envia para Victor
         )
 
-    # ETAPA — DESCRIÇÃO LIVRE
+    # ── ETAPA — DESCRIÇÃO LIVRE ───────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_DESCRICAO:
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
         enviar_mensagem(phone, msg.CONFIRMACAO_RECEBIMENTO)
-        enviar_mensagem(VICTOR_PHONE, msg.notif_outro(nome_salvo, phone, texto))
+        enviar_mensagem(
+            VICTOR_PHONE,
+            msg.notif_outro(nome_salvo, phone, texto)            # ✅ envia para Victor
+        )
 
-    # ETAPA — MARINADAS
+    # ── ETAPA — MARINADAS ─────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_MARINADAS:
         logger.info(f"[{phone}] Mensagem recebida em AGUARDA_MARINADAS — ignorando")
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
         return
 
-    # ATENDIMENTO HUMANO — BOT SILENCIOSO
+    # ── ATENDIMENTO HUMANO — BOT SILENCIOSO ───────────────────────────────────
     elif etapa == ESTADO_ATENDIMENTO_HUMANO:
         logger.info(f"[{phone}] Em ATENDIMENTO_HUMANO — bot silencioso")
         return
 
-    # ESTADO DESCONHECIDO
+    # ── ESTADO DESCONHECIDO ───────────────────────────────────────────────────
     else:
         logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando")
         atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO)
