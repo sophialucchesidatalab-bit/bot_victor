@@ -82,7 +82,7 @@ def detectar_local(texto: str) -> str | None:
     t = normalizar(texto)
     if any(x in t for x in ["copa", "copacabana"]):
         return "Copacabana"
-    if any(x in t for x in ["meier", "meir", "mier, "maxfit", "max"]):
+    if any(x in t for x in ["meier", "meir", "mier", "maxfit", "max"]):
         return "Méier"
     if any(x in t for x in ["online", "remoto", "virtual", "meet"]):
         return "Online"
