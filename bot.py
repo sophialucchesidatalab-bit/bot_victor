@@ -1,15 +1,12 @@
 """
-bot.py — Máquina de estados do bot Victor Afonso Nutricionista
+bot.py — Bot Victor Afonso Nutricionista
 
-FLUXO SIMPLIFICADO:
-    O bot coleta local e turno de preferência,
-    avisa o paciente que a atendente entrará em contato
-    e envia resumo completo para Victor.
-    Todo o restante (horário, confirmação, calendário) é feito pelo humano.
+FLUXO:
+  Saudação → Menu → Submenu → Info/Local → Turno → Encerra (passa para humano)
 
-REGRA ANTI-REPETIÇÃO:
-    Cada etapa grava um ID de bloco em "ultima_msg" na planilha.
-    Se ultima_msg == bloco_desta_etapa, a mensagem já foi enviada → ignora.
+ANTI-REPETIÇÃO:
+  Coluna "ultima_msg" na planilha guarda o ID do último bloco enviado.
+  Se ja_enviou() → ignora, não reenvia.
 """
 import logging
 from config import (
@@ -21,7 +18,6 @@ from config import (
 )
 from sheets import buscar_estado, criar_registro, atualizar_estado
 from zapi import enviar_mensagem
-from claude_ai import processar_mensagem_livre
 import mensagens as msg
 
 logger = logging.getLogger(__name__)
@@ -52,11 +48,11 @@ def detectar_local(texto: str) -> str | None:
 def detectar_turno(texto: str) -> str | None:
     t = normalizar(texto)
     if "manha" in t:
-        return "manhã"
+        return "Manhã"
     if "tarde" in t:
-        return "tarde"
+        return "Tarde"
     if "noite" in t:
-        return "noite"
+        return "Noite"
     return None
 
 
@@ -69,7 +65,6 @@ def detectar_endereco(texto: str) -> bool:
 
 
 def ja_enviou(registro: dict, bloco: str) -> bool:
-    """Retorna True se esse bloco já foi enviado — evita reenvio."""
     return registro.get("ultima_msg", "") == bloco
 
 
@@ -97,7 +92,7 @@ def processar_mensagem(phone: str, nome: str, texto: str):
 
     logger.info(f"[{phone}] etapa={etapa} | ultima_msg={registro.get('ultima_msg')}")
 
-    # ── ATALHO: endereço perguntado em qualquer etapa ──────
+    # ── ATALHO: paciente pedindo endereço em qualquer etapa ─
     if detectar_endereco(texto_norm) and local:
         if local == "Copacabana":
             enviar_mensagem(phone, msg.ENDERECO_COPA)
@@ -124,52 +119,53 @@ def processar_mensagem(phone: str, nome: str, texto: str):
                     msg.notif_marinadas(nome_salvo, phone))
 
         elif texto_norm in ["3", "3️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_DESCRICAO):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO,
-                                 ultima_msg=msg.BLOCO_DESCRICAO)
-                enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
-
-        else:
-            if not ja_enviou(registro, msg.BLOCO_MENU):
-                resposta_ia = processar_mensagem_livre(
-                    texto,
-                    contexto="O paciente está no menu principal e enviou mensagem fora do padrão."
-                )
-                enviar_mensagem(phone, resposta_ia)
-                enviar_mensagem(phone, msg.MENU_PRINCIPAL)
-                atualizar_estado(row, ultima_msg=msg.BLOCO_MENU)
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA 2 — SUBMENU (1ª consulta / retorno / infos)
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_AGUARDA_SUBMENU:
-        if texto_norm in ["1", "1️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_INFO_CONSULTA):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL,
-                                 ultima_msg=msg.BLOCO_INFO_CONSULTA)
-                enviar_mensagem(phone, msg.INFO_CONSULTA_PARTE1)
-                enviar_mensagem(phone, msg.INFO_CONSULTA_PARTE2)
-
-        elif texto_norm in ["2", "2️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_INFO_CONSULTA):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL,
-                                 ultima_msg=msg.BLOCO_INFO_CONSULTA)
-                enviar_mensagem(phone, msg.PERGUNTA_LOCAL_RETORNO)
-
-        elif texto_norm in ["3", "3️⃣"]:
             if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
                 atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
                                  ultima_msg=msg.BLOCO_ATENDENTE)
                 enviar_mensagem(phone, msg.AGUARDA_ATENDENTE)
                 enviar_mensagem(VICTOR_PHONE,
-                    msg.notif_outro(nome_salvo, phone, "Paciente pediu outras informações"))
+                    msg.notif_outro(nome_salvo, phone, "Paciente escolheu 'Outros assuntos' no menu"))
+
+        else:
+            # Qualquer saudação ou texto livre → reapresenta menu
+            if not ja_enviou(registro, msg.BLOCO_MENU):
+                atualizar_estado(row, ultima_msg=msg.BLOCO_MENU)
+                enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+
+    # ════════════════════════════════════════════════════════
+    # ETAPA 2 — SUBMENU
+    # ════════════════════════════════════════════════════════
+    elif etapa == ESTADO_AGUARDA_SUBMENU:
+
+        if texto_norm in ["1", "1️⃣"]:
+            # Primeira consulta: envia info completa + pergunta local
+            if not ja_enviou(registro, msg.BLOCO_INFO_CONSULTA):
+                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL,
+                                 ultima_msg=msg.BLOCO_INFO_CONSULTA)
+                enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
+
+        elif texto_norm in ["2", "2️⃣"]:
+            # Retorno: vai direto para pergunta de local
+            if not ja_enviou(registro, msg.BLOCO_INFO_CONSULTA):
+                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL,
+                                 ultima_msg=msg.BLOCO_INFO_CONSULTA)
+                enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
+
+        elif texto_norm in ["3", "3️⃣"]:
+            # Outras informações: chama atendente
+            if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
+                atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
+                                 ultima_msg=msg.BLOCO_ATENDENTE)
+                enviar_mensagem(phone, msg.AGUARDA_ATENDENTE)
+                enviar_mensagem(VICTOR_PHONE,
+                    msg.notif_outro(nome_salvo, phone, "Paciente pediu 'Outras informações' no submenu de consulta"))
 
         else:
             enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
             enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
 
     # ════════════════════════════════════════════════════════
-    # ETAPA 3 — ESCOLHA DO LOCAL
+    # ETAPA 3 — LOCAL
     # ════════════════════════════════════════════════════════
     elif etapa == ESTADO_AGUARDA_LOCAL:
         local_detectado = detectar_local(texto)
@@ -183,25 +179,25 @@ def processar_mensagem(phone: str, nome: str, texto: str):
             enviar_mensagem(phone, msg.ERRO_LOCAL_INVALIDO)
 
     # ════════════════════════════════════════════════════════
-    # ETAPA 4 — TURNO DE PREFERÊNCIA
-    # ✅ ÚLTIMO PASSO DO BOT — após isso, passa para humano
+    # ETAPA 4 — TURNO  ← ÚLTIMO PASSO DO BOT
+    # Encerra e passa para atendimento humano
     # ════════════════════════════════════════════════════════
     elif etapa == ESTADO_AGUARDA_TURNO:
-        turno = detectar_turno(texto) or "sem preferência"
+        turno = detectar_turno(texto) or texto.strip().capitalize()
 
         if not ja_enviou(registro, msg.BLOCO_ENCERRAMENTO):
             atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
                              hora=turno, ultima_msg=msg.BLOCO_ENCERRAMENTO)
 
-            # 1. Avisa paciente que atendente confirmará o horário
+            # 1. Confirma para o paciente
             enviar_mensagem(phone, msg.ENCERRAMENTO_BOT)
 
-            # 2. Envia resumo completo para Victor
+            # 2. Envia resumo para Victor
             enviar_mensagem(VICTOR_PHONE,
                 msg.notif_triagem(nome_salvo, phone, local, turno))
 
     # ════════════════════════════════════════════════════════
-    # ETAPA: DESCRIÇÃO LIVRE (opção 3 do menu)
+    # ETAPA: DESCRIÇÃO LIVRE (opção 3 do menu principal)
     # ════════════════════════════════════════════════════════
     elif etapa == ESTADO_AGUARDA_DESCRICAO:
         if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
@@ -215,31 +211,21 @@ def processar_mensagem(phone: str, nome: str, texto: str):
     # ETAPA: MARINADAS
     # ════════════════════════════════════════════════════════
     elif etapa == ESTADO_AGUARDA_MARINADAS:
+        # Bot já enviou o link — qualquer mensagem nova vai para Victor
         if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
             atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
                              ultima_msg=msg.BLOCO_ATENDENTE)
-            resposta_ia = processar_mensagem_livre(
-                texto,
-                contexto="O paciente tem interesse nas Marinadas do Nutri Victor e enviou uma dúvida."
-            )
-            enviar_mensagem(phone, resposta_ia)
             enviar_mensagem(phone,
                 "Nossa atendente estará disponível para te ajudar em breve! 💚")
             enviar_mensagem(VICTOR_PHONE,
                 msg.notif_outro(nome_salvo, phone, texto))
 
     # ════════════════════════════════════════════════════════
-    # ETAPA: ATENDIMENTO HUMANO — bot silencioso
-    # Qualquer mensagem nova é encaminhada para Victor
+    # ATENDIMENTO HUMANO — bot silencioso, repassa para Victor
     # ════════════════════════════════════════════════════════
     elif etapa == ESTADO_ATENDIMENTO_HUMANO:
-        # Só repassa para Victor se for uma mensagem nova relevante
-        # (não reenvia se já chamou a atendente)
-        if registro.get("ultima_msg") != "ENCAMINHADO":
-            pass  # silencioso — atendente humana assume a conversa
-        # Se o paciente insistir com dúvida, encaminha para Victor
         enviar_mensagem(VICTOR_PHONE,
-            f"💬 *Nova mensagem de paciente em atendimento:*\n\n"
+            f"💬 *Mensagem de paciente em atendimento:*\n\n"
             f"*Paciente:* {nome_salvo}\n"
             f"*WhatsApp:* {phone}\n"
             f"*Mensagem:* {texto}"
