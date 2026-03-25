@@ -1,255 +1,251 @@
 """
-bot.py — Máquina de estados do bot Victor Afonso Nutricionista
-
-FLUXO SIMPLIFICADO:
-    O bot coleta local e turno de preferência,
-    avisa o paciente que a atendente entrará em contato
-    e envia resumo completo para Victor.
-    Todo o restante (horário, confirmação, calendário) é feito pelo humano.
-
-REGRA ANTI-REPETIÇÃO:
-    Cada etapa grava um ID de bloco em "ultima_msg" na planilha.
-    Se ultima_msg == bloco_desta_etapa, a mensagem já foi enviada → ignora.
+mensagens.py — Textos do bot Victor Afonso Nutricionista
+Tom baseado nas conversas reais do consultório.
 """
-import logging
-from config import (
-    VICTOR_PHONE,
-    ESTADO_AGUARDA_OPCAO, ESTADO_AGUARDA_SUBMENU,
-    ESTADO_AGUARDA_LOCAL, ESTADO_AGUARDA_TURNO,
-    ESTADO_AGUARDA_DESCRICAO, ESTADO_AGUARDA_MARINADAS,
-    ESTADO_ATENDIMENTO_HUMANO,
+from config import LINK_MARINADAS, LINK_QUESTIONARIO, LINK_ORIENTACOES_IMG
+
+# ════════════════════════════════════════════════════════════
+# BLOCOS — IDs para controle anti-repetição
+# Salvo na coluna "ultima_msg" da planilha Google Sheets
+# O bot.py só envia um bloco se ultima_msg != esse ID
+# ════════════════════════════════════════════════════════════
+BLOCO_MENU          = "MENU"
+BLOCO_SUBMENU       = "SUBMENU"
+BLOCO_INFO_CONSULTA = "INFO_CONSULTA"
+BLOCO_TURNO         = "TURNO"
+BLOCO_HORARIOS      = "HORARIOS"
+BLOCO_CONFIRMADO    = "CONFIRMADO"
+BLOCO_MARINADAS     = "MARINADAS"
+BLOCO_DESCRICAO     = "DESCRICAO"
+BLOCO_ATENDENTE     = "ATENDENTE"
+
+
+# ════════════════════════════════════════════════════════════
+# MENU PRINCIPAL
+# ════════════════════════════════════════════════════════════
+MENU_PRINCIPAL = (
+    "Consultório Nutricionista Victor Afonso, que bom te ver por aqui 🙏\n\n"
+    "Para te ajudar melhor, escolha uma das opções abaixo:\n\n"
+    "1️⃣ Informações sobre o acompanhamento nutricional\n"
+    "2️⃣ Informações sobre as Marinadas do Nutri\n"
+    "3️⃣ Outros assuntos\n\n"
+    "É só responder com *1*, *2* ou *3* 💚"
 )
-from sheets import buscar_estado, criar_registro, atualizar_estado
-from zapi import enviar_mensagem
-from claude_ai import processar_mensagem_livre
-import mensagens as msg
 
-logger = logging.getLogger(__name__)
+# ════════════════════════════════════════════════════════════
+# SUBMENU CONSULTA
+# ════════════════════════════════════════════════════════════
+SUBMENU_CONSULTA = (
+    "Ótimo! Pode me confirmar:\n\n"
+    "1️⃣ Primeira consulta\n"
+    "2️⃣ Agendar retorno\n"
+    "3️⃣ Outras informações"
+)
+
+# ════════════════════════════════════════════════════════════
+# INFO DA CONSULTA — 2 partes, como Victor faz na conversa
+# Parte 1: o que inclui + acompanhamento 3 meses
+# Parte 2: locais, valor, pagamento + pergunta do local
+# ════════════════════════════════════════════════════════════
+INFO_CONSULTA_PARTE1 = (
+    "Fico feliz que tenha nos encontrado! 😊\n\n"
+    "Vou te explicar como funciona o acompanhamento com o Nutri Victor:\n\n"
+    "• Anamnese completa, observando os principais pontos que possam estar "
+    "prejudicando sua performance e/ou saúde\n"
+    "• Avaliação física (Bioimpedância, Dobras cutâneas e circunferências)\n"
+    "• Caso necessário, solicitação de exames bioquímicos de acordo com suas "
+    "queixas clínicas\n"
+    "• Elaboração de um programa alimentar totalmente personalizado para VOCÊ, "
+    "com receitas e suplementação\n"
+    "• *Acompanhamento de 3 meses* com suporte via WhatsApp — você pode ajustar "
+    "a dieta quantas vezes forem necessárias para alcançar seu objetivo!"
+)
+
+INFO_CONSULTA_PARTE2 = (
+    "O atendimento pode ser feito de 2 formas:\n\n"
+    "📍 *Presencial:* Max Fit (Méier) ou Integra Saúde (Copacabana)\n"
+    "💻 *Online:* Google Meet ou WhatsApp Vídeo (até 1h30)\n\n"
+    "➡️ Valor: *R$300,00*\n"
+    "💳 Presencial: débito, crédito à vista ou Pix\n"
+    "📱 Online: Pix, transferência ou PagSeguro\n\n"
+    "Você gostaria de agendar em *Copa*, *Méier* ou *Online*? 😊"
+)
+
+# Só a pergunta de local, usada no fluxo de retorno
+PERGUNTA_LOCAL_RETORNO = (
+    "Qual local prefere para o retorno?\n\n"
+    "📍 Copacabana\n"
+    "📍 Méier\n"
+    "💻 Online"
+)
+
+# ════════════════════════════════════════════════════════════
+# TURNO
+# ════════════════════════════════════════════════════════════
+PERGUNTA_TURNO = (
+    "Você teria algum turno ou dia da semana de preferência? 📅\n\n"
+    "🌅 Manhã\n"
+    "☀️ Tarde\n"
+    "🌙 Noite"
+)
+
+# Instrução de resposta enviada junto com os horários disponíveis
+INSTRUCAO_HORARIO = (
+    "Qual horário você prefere? 😊\n"
+    "_(Responda com data e horário, ex: *27/03 às 11:00*)_"
+)
+
+# ════════════════════════════════════════════════════════════
+# MARINADAS
+# ════════════════════════════════════════════════════════════
+MARINADAS = (
+    f"Que ótima escolha! 🥩🔥\n\n"
+    f"As *Marinadas do Nutri* são temperos naturais desenvolvidos pelo próprio "
+    f"Nutri Victor, pensados para deixar sua alimentação mais saborosa e saudável "
+    f"ao mesmo tempo.\n\n"
+    f"Clica no link abaixo para conhecer e garantir o seu:\n"
+    f"👉 {LINK_MARINADAS}\n\n"
+    f"Qualquer dúvida é só chamar! 💚"
+)
+
+# ════════════════════════════════════════════════════════════
+# OUTROS ASSUNTOS
+# ════════════════════════════════════════════════════════════
+PEDIR_DESCRICAO = (
+    "Claro! Me conta um pouco mais sobre o que você precisa 😊\n\n"
+    "Pode descrever à vontade que nossa atendente irá te responder em breve! 💚"
+)
+
+CONFIRMACAO_RECEBIMENTO = (
+    "Recebemos sua mensagem! 📩\n\n"
+    "Nossa atendente irá te responder em breve. Obrigado pelo contato! 💚"
+)
+
+AGUARDA_ATENDENTE = (
+    "Certo! Nossa atendente vai te responder em breve com todas as informações 💚"
+)
+
+# ════════════════════════════════════════════════════════════
+# PÓS-AGENDAMENTO — 3 mensagens separadas (padrão Victor)
+# bot.py envia: msg1 → msg2 → imagem bioimpedância → msg3
+# ════════════════════════════════════════════════════════════
+def pos_agendamento(nome: str, local: str, horario: str) -> tuple:
+    msg1 = (
+        f"Combinado {nome}, marcado! 🎉\n\n"
+        f"📍 *Local:* {local}\n"
+        f"🕐 *Horário:* {horario}\n\n"
+        f"Estamos à disposição! 💚"
+    )
+    msg2 = (
+        f"Peço, por gentileza, que responda esse questionário pré-consulta "
+        f"com algumas perguntas importantes:\n"
+        f"👉 {LINK_QUESTIONARIO}"
+    )
+    msg3 = (
+        "Por fim, seguem as orientações para uma avaliação mais assertiva 👆"
+    )
+    return msg1, msg2, msg3
+
+# ════════════════════════════════════════════════════════════
+# ENDEREÇOS (enviados quando paciente perguntar)
+# ════════════════════════════════════════════════════════════
+ENDERECO_COPA = (
+    "📍 *Integra Saúde — Copacabana*\n"
+    "Praça Serzedelo Corrêa, 15 — sala 703\n"
+    "Próximo à estação de metrô Siqueira Campos 🚇"
+)
+
+ENDERECO_MEIER = (
+    "📍 *Academia Max Fit — Méier*\n"
+    "R. Mario Piragibe, 26 — Méier 🏋️"
+)
+
+IA_NAO_SABE = (
+    "Aguarde um momento, vou chamar a assistente para te ajudar! 💚"
+)
+
+# ════════════════════════════════════════════════════════════
+# ERROS / FALLBACKS
+# ════════════════════════════════════════════════════════════
+ERRO_OPCAO_INVALIDA = (
+    "Não entendi sua resposta 😅\n\n"
+    "Por favor responda com o número da opção desejada:"
+)
+
+ERRO_LOCAL_INVALIDO = (
+    "Não entendi o local 😅\n\n"
+    "Por favor informe: 📍 *Copa*, *Méier* ou 💻 *Online*"
+)
+
+# ════════════════════════════════════════════════════════════
+# NOTIFICAÇÕES PARA VICTOR
+# ════════════════════════════════════════════════════════════
+def notif_interesse(nome: str, phone: str, local: str, turno: str) -> str:
+    return (
+        f"📅 *Nova solicitação de consulta!*\n\n"
+        f"*Paciente:* {nome}\n"
+        f"*Telefone:* {phone}\n"
+        f"*Local:* {local}\n"
+        f"*Turno preferido:* {turno}\n\n"
+        f"Horários foram enviados ao paciente. Aguardando escolha 💚"
+    )
+
+def notif_agendado(nome: str, phone: str, local: str,
+                   horario: str, turno: str, sucesso_agenda: bool) -> str:
+    aviso = "✅ Evento criado no Google Agenda" if sucesso_agenda else "⚠️ Criar evento manualmente na agenda"
+    return (
+        f"🎉 *Consulta Agendada!*\n\n"
+        f"*Paciente:* {nome}\n"
+        f"*WhatsApp:* {phone}\n"
+        f"*Local:* {local}\n"
+        f"*Horário:* {horario}\n"
+        f"*Turno preferido:* {turno}\n\n"
+        f"{aviso}\n\n"
+        f"Questionário e orientações já foram enviados ao paciente 💚"
+    )
+
+def notif_outro(nome: str, phone: str, assunto: str) -> str:
+    return (
+        f"📬 *Nova mensagem recebida!*\n\n"
+        f"*De:* {nome} — {phone}\n"
+        f"*Assunto:* {assunto}\n\n"
+        f"Responda diretamente pelo WhatsApp 💚"
+    )
+
+def notif_marinadas(nome: str, phone: str) -> str:
+    return (
+        f"🥩 *Interesse nas Marinadas!*\n\n"
+        f"*Paciente:* {nome}\n"
+        f"*Telefone:* {phone}\n\n"
+        f"O link foi enviado automaticamente 💚"
+    )
 
 
-# ─────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+# ENCERRAMENTO DO BOT (após turno coletado)
+# ════════════════════════════════════════════════════════════
+BLOCO_ENCERRAMENTO = "ENCERRAMENTO"
 
-def normalizar(texto: str) -> str:
-    import unicodedata
-    texto = texto.lower().strip()
-    texto = unicodedata.normalize("NFD", texto)
-    return "".join(c for c in texto if unicodedata.category(c) != "Mn")
-
-
-def detectar_local(texto: str) -> str | None:
-    t = normalizar(texto)
-    if any(x in t for x in ["copa", "copacabana"]):
-        return "Copacabana"
-    if any(x in t for x in ["meier", "meir", "mier"]):
-        return "Méier"
-    if any(x in t for x in ["online", "remoto", "virtual", "meet"]):
-        return "Online"
-    return None
+ENCERRAMENTO_BOT = (
+    "Perfeito! 😊✅\n\n"
+    "Já anotei tudo:\n\n"
+    "Nossa atendente entrará em contato em breve para confirmar "
+    "a data e o horário disponíveis para você! 💚\n\n"
+    "Qualquer dúvida, estamos por aqui."
+)
 
 
-def detectar_turno(texto: str) -> str | None:
-    t = normalizar(texto)
-    if "manha" in t:
-        return "manhã"
-    if "tarde" in t:
-        return "tarde"
-    if "noite" in t:
-        return "noite"
-    return None
-
-
-def detectar_endereco(texto: str) -> bool:
-    t = normalizar(texto)
-    return any(x in t for x in [
-        "endereco", "endereço", "onde fica", "localizacao",
-        "como chegar", "onde e", "onde é", "maps"
-    ])
-
-
-def ja_enviou(registro: dict, bloco: str) -> bool:
-    """Retorna True se esse bloco já foi enviado — evita reenvio."""
-    return registro.get("ultima_msg", "") == bloco
-
-
-# ─────────────────────────────────────────────────────────
-# PROCESSADOR PRINCIPAL
-# ─────────────────────────────────────────────────────────
-
-def processar_mensagem(phone: str, nome: str, texto: str):
-    texto_norm = normalizar(texto)
-    logger.info(f"[{phone}] msg='{texto}'")
-
-    registro = buscar_estado(phone)
-
-    # ── PACIENTE NOVO ──────────────────────────────────────
-    if registro is None:
-        criar_registro(phone, nome, ESTADO_AGUARDA_OPCAO,
-                       ultima_msg=msg.BLOCO_MENU)
-        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
-        return
-
-    etapa      = registro.get("etapa", ESTADO_AGUARDA_OPCAO)
-    local      = registro.get("local", "")
-    row        = registro.get("row_number")
-    nome_salvo = registro.get("nome", nome) or nome
-
-    logger.info(f"[{phone}] etapa={etapa} | ultima_msg={registro.get('ultima_msg')}")
-
-    # ── ATALHO: endereço perguntado em qualquer etapa ──────
-    if detectar_endereco(texto_norm) and local:
-        if local == "Copacabana":
-            enviar_mensagem(phone, msg.ENDERECO_COPA)
-        elif local == "Méier":
-            enviar_mensagem(phone, msg.ENDERECO_MEIER)
-        return
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA 1 — MENU PRINCIPAL
-    # ════════════════════════════════════════════════════════
-    if etapa == ESTADO_AGUARDA_OPCAO:
-        if texto_norm in ["1", "1️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_SUBMENU):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU,
-                                 ultima_msg=msg.BLOCO_SUBMENU)
-                enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
-
-        elif texto_norm in ["2", "2️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_MARINADAS):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_MARINADAS,
-                                 ultima_msg=msg.BLOCO_MARINADAS)
-                enviar_mensagem(phone, msg.MARINADAS)
-                enviar_mensagem(VICTOR_PHONE,
-                    msg.notif_marinadas(nome_salvo, phone))
-
-        elif texto_norm in ["3", "3️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_DESCRICAO):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO,
-                                 ultima_msg=msg.BLOCO_DESCRICAO)
-                enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
-
-        else:
-            if not ja_enviou(registro, msg.BLOCO_MENU):
-                resposta_ia = processar_mensagem_livre(
-                    texto,
-                    contexto="O paciente está no menu principal e enviou mensagem fora do padrão."
-                )
-                enviar_mensagem(phone, resposta_ia)
-                enviar_mensagem(phone, msg.MENU_PRINCIPAL)
-                atualizar_estado(row, ultima_msg=msg.BLOCO_MENU)
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA 2 — SUBMENU (1ª consulta / retorno / infos)
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_AGUARDA_SUBMENU:
-        if texto_norm in ["1", "1️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_INFO_CONSULTA):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL,
-                                 ultima_msg=msg.BLOCO_INFO_CONSULTA)
-                enviar_mensagem(phone, msg.INFO_CONSULTA_PARTE1)
-                enviar_mensagem(phone, msg.INFO_CONSULTA_PARTE2)
-
-        elif texto_norm in ["2", "2️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_INFO_CONSULTA):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL,
-                                 ultima_msg=msg.BLOCO_INFO_CONSULTA)
-                enviar_mensagem(phone, msg.PERGUNTA_LOCAL_RETORNO)
-
-        elif texto_norm in ["3", "3️⃣"]:
-            if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
-                atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
-                                 ultima_msg=msg.BLOCO_ATENDENTE)
-                enviar_mensagem(phone, msg.AGUARDA_ATENDENTE)
-                enviar_mensagem(VICTOR_PHONE,
-                    msg.notif_outro(nome_salvo, phone, "Paciente pediu outras informações"))
-
-        else:
-            enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
-            enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA 3 — ESCOLHA DO LOCAL
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_AGUARDA_LOCAL:
-        local_detectado = detectar_local(texto)
-        if local_detectado:
-            if not ja_enviou(registro, msg.BLOCO_TURNO):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO,
-                                 local=local_detectado,
-                                 ultima_msg=msg.BLOCO_TURNO)
-                enviar_mensagem(phone, msg.PERGUNTA_TURNO)
-        else:
-            enviar_mensagem(phone, msg.ERRO_LOCAL_INVALIDO)
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA 4 — TURNO DE PREFERÊNCIA
-    # ✅ ÚLTIMO PASSO DO BOT — após isso, passa para humano
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_AGUARDA_TURNO:
-        turno = detectar_turno(texto) or "sem preferência"
-
-        if not ja_enviou(registro, msg.BLOCO_ENCERRAMENTO):
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
-                             hora=turno, ultima_msg=msg.BLOCO_ENCERRAMENTO)
-
-            # 1. Avisa paciente que atendente confirmará o horário
-            enviar_mensagem(phone, msg.ENCERRAMENTO_BOT)
-
-            # 2. Envia resumo completo para Victor
-            enviar_mensagem(VICTOR_PHONE,
-                msg.notif_triagem(nome_salvo, phone, local, turno))
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA: DESCRIÇÃO LIVRE (opção 3 do menu)
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_AGUARDA_DESCRICAO:
-        if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
-                             ultima_msg=msg.BLOCO_ATENDENTE)
-            enviar_mensagem(phone, msg.CONFIRMACAO_RECEBIMENTO)
-            enviar_mensagem(VICTOR_PHONE,
-                msg.notif_outro(nome_salvo, phone, texto))
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA: MARINADAS
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_AGUARDA_MARINADAS:
-        if not ja_enviou(registro, msg.BLOCO_ATENDENTE):
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
-                             ultima_msg=msg.BLOCO_ATENDENTE)
-            resposta_ia = processar_mensagem_livre(
-                texto,
-                contexto="O paciente tem interesse nas Marinadas do Nutri Victor e enviou uma dúvida."
-            )
-            enviar_mensagem(phone, resposta_ia)
-            enviar_mensagem(phone,
-                "Nossa atendente estará disponível para te ajudar em breve! 💚")
-            enviar_mensagem(VICTOR_PHONE,
-                msg.notif_outro(nome_salvo, phone, texto))
-
-    # ════════════════════════════════════════════════════════
-    # ETAPA: ATENDIMENTO HUMANO — bot silencioso
-    # Qualquer mensagem nova é encaminhada para Victor
-    # ════════════════════════════════════════════════════════
-    elif etapa == ESTADO_ATENDIMENTO_HUMANO:
-        # Só repassa para Victor se for uma mensagem nova relevante
-        # (não reenvia se já chamou a atendente)
-        if registro.get("ultima_msg") != "ENCAMINHADO":
-            pass  # silencioso — atendente humana assume a conversa
-        # Se o paciente insistir com dúvida, encaminha para Victor
-        enviar_mensagem(VICTOR_PHONE,
-            f"💬 *Nova mensagem de paciente em atendimento:*\n\n"
-            f"*Paciente:* {nome_salvo}\n"
-            f"*WhatsApp:* {phone}\n"
-            f"*Mensagem:* {texto}"
-        )
-
-    # ════════════════════════════════════════════════════════
-    # ESTADO DESCONHECIDO → REINICIA
-    # ════════════════════════════════════════════════════════
-    else:
-        logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando")
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO,
-                         ultima_msg=msg.BLOCO_MENU)
-        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+def notif_triagem(nome: str, phone: str, local: str, turno: str) -> str:
+    """
+    Notificação enviada para Victor ao final da triagem do bot.
+    Contém tudo que foi coletado para a atendente dar sequência.
+    """
+    return (
+        f"📋 *Nova triagem concluída!*\n\n"
+        f"*Paciente:* {nome}\n"
+        f"*WhatsApp:* {phone}\n"
+        f"*Local preferido:* {local}\n"
+        f"*Turno preferido:* {turno}\n\n"
+        f"O bot encerrou. Por favor, entre em contato para confirmar "
+        f"a data e o horário! 💚"
+    )
