@@ -18,6 +18,19 @@ import mensagens as msg
 logger = logging.getLogger(__name__)
 
 
+def normalizar_phone(phone: str) -> str:
+    """
+    Garante que o número sempre seja salvo e buscado no mesmo formato.
+    Remove tudo que não for dígito, depois aplica formato padrão brasileiro.
+    Exemplo: +55 21 99880-9680 → 5521998809680
+    """
+    digits = "".join(c for c in str(phone) if c.isdigit())
+    # Remove código de país duplicado (ex: 5555...)
+    if digits.startswith("55") and len(digits) > 13:
+        digits = digits[2:]
+    return digits
+
+
 def normalizar(texto: str) -> str:
     import unicodedata
     texto = texto.lower().strip()
@@ -34,6 +47,8 @@ def detectar_opcao_menu(texto_norm: str) -> str | None:
     # Opção 1 — consulta / acompanhamento nutricional
     if texto_norm in ["1", "1️⃣"]:
         return "1"
+    if texto_norm.startswith("1"):
+        return "1"
     if any(x in texto_norm for x in [
         "consul", "acompanhamento", "nutricional", "nutri", "retorno",
         "agendar", "agendamento", "informacao", "informacoes", "primeira"
@@ -43,11 +58,15 @@ def detectar_opcao_menu(texto_norm: str) -> str | None:
     # Opção 2 — marinadas
     if texto_norm in ["2", "2️⃣"]:
         return "2"
+    if texto_norm.startswith("2"):
+        return "2"
     if any(x in texto_norm for x in ["marinada", "marinadas", "tempero", "produto"]):
         return "2"
 
     # Opção 3 — outros assuntos
     if texto_norm in ["3", "3️⃣"]:
+        return "3"
+    if texto_norm.startswith("3"):
         return "3"
     if any(x in texto_norm for x in ["outro", "outros", "assunto", "duvida", "pergunta"]):
         return "3"
@@ -62,15 +81,21 @@ def detectar_opcao_submenu(texto_norm: str) -> str | None:
     """
     if texto_norm in ["1", "1️⃣"]:
         return "1"
+    if texto_norm.startswith("1"):
+        return "1"
     if any(x in texto_norm for x in ["primeira", "novo", "nunca fui", "primeira vez"]):
         return "1"
 
     if texto_norm in ["2", "2️⃣"]:
         return "2"
-    if any(x in texto_norm for x in ["retorno", "voltar", "ja fui", "já fui", "segunda"]):
+    if texto_norm.startswith("2"):
+        return "2"
+    if any(x in texto_norm for x in ["retorno", "voltar", "ja fui", "segunda"]):
         return "2"
 
     if texto_norm in ["3", "3️⃣"]:
+        return "3"
+    if texto_norm.startswith("3"):
         return "3"
     if any(x in texto_norm for x in ["outro", "outros", "informacao", "duvida"]):
         return "3"
@@ -82,7 +107,7 @@ def detectar_local(texto: str) -> str | None:
     t = normalizar(texto)
     if any(x in t for x in ["copa", "copacabana"]):
         return "Copacabana"
-    if any(x in t for x in ["meier", "meir", "mier", "maxfit", "max"]):
+    if any(x in t for x in ["meier", "meir", "mier"]):
         return "Méier"
     if any(x in t for x in ["online", "remoto", "virtual", "meet"]):
         return "Online"
@@ -113,6 +138,9 @@ def data_hoje():
 
 
 def processar_mensagem(phone: str, nome: str, texto: str):
+    # ── Normaliza o número antes de qualquer operação ──────────────────────────
+    phone = normalizar_phone(phone)
+
     texto_norm = normalizar(texto)
     logger.info(f"[{phone}] msg='{texto}'")
 
@@ -162,7 +190,6 @@ def processar_mensagem(phone: str, nome: str, texto: str):
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
 
         else:
-            # Não reconheceu — pede para escolher novamente SEM repetir menu inteiro
             enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
             enviar_mensagem(phone, msg.MENU_PRINCIPAL)
 
@@ -196,7 +223,6 @@ def processar_mensagem(phone: str, nome: str, texto: str):
             enviar_mensagem(phone, msg.ERRO_LOCAL_INVALIDO)
 
     # ── ETAPA 4 — TURNO ───────────────────────────────────────────────────────
-    # Último passo do bot: coleta turno → notifica Victor → encerra automação
     elif etapa == ESTADO_AGUARDA_TURNO:
         turno = detectar_turno(texto) or texto.strip().capitalize()
 
