@@ -67,13 +67,10 @@ def processar_mensagem(phone: str, nome: str, texto: str):
 
     # PACIENTE NOVO
     if registro is None:
-        criar_registro(
+        criar_registro(          # ✅ CORRIGIDO: apenas os 3 parâmetros que existem
             phone=phone,
-            etapa=ESTADO_AGUARDA_OPCAO,
-            local="",
-            data=data_hoje(),
-            hora="",
-            nome=nome
+            nome=nome,
+            etapa=ESTADO_AGUARDA_OPCAO
         )
         enviar_mensagem(phone, msg.MENU_PRINCIPAL)
         return
@@ -167,11 +164,13 @@ def processar_mensagem(phone: str, nome: str, texto: str):
 
     # ETAPA — MARINADAS
     elif etapa == ESTADO_AGUARDA_MARINADAS:
+        logger.info(f"[{phone}] Mensagem recebida em AGUARDA_MARINADAS — ignorando")
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
         return
 
     # ATENDIMENTO HUMANO — BOT SILENCIOSO
     elif etapa == ESTADO_ATENDIMENTO_HUMANO:
+        logger.info(f"[{phone}] Em ATENDIMENTO_HUMANO — bot silencioso")
         return
 
     # ESTADO DESCONHECIDO
