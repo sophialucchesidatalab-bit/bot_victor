@@ -1,8 +1,8 @@
 import os
 
 # === Z-API ===
-ZAPI_INSTANCE     = os.getenv("ZAPI_INSTANCE", "3F08645D62A8F15B3B63CA0B4A3FCD13")   # ✅ Instance ID
-ZAPI_TOKEN        = os.getenv("ZAPI_TOKEN",    "BB8428EE82CF8EB91C2A62F3")            # ✅ Token
+ZAPI_INSTANCE     = os.getenv("ZAPI_INSTANCE", "3F08645D62A8F15B3B63CA0B4A3FCD13")  # ✅ Instance ID
+ZAPI_TOKEN        = os.getenv("ZAPI_TOKEN",    "BB8428EE82CF8EB91C2A62F3")           # ✅ Token
 ZAPI_BASE_URL     = f"https://api.z-api.io/instances/{ZAPI_INSTANCE}/token/{ZAPI_TOKEN}"
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
@@ -15,11 +15,6 @@ VICTOR_PHONE = os.getenv("VICTOR_PHONE", "5521997501668")
 # === GOOGLE SHEETS ===
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "14qcCx9nM6NWjg6O6SCdYX6N94kXwI64FQqMHejkb4ZI")
 SHEET_NAME     = os.getenv("SHEET_NAME",     "Bot_estado")
-
-# === GOOGLE CALENDAR ===
-CALENDAR_COPA   = os.getenv("CALENDAR_COPA",   "contato@integracopacabana.com")
-CALENDAR_MEIER  = os.getenv("CALENDAR_MEIER",  "maxrecepcaoagenda@gmail.com")
-CALENDAR_ONLINE = os.getenv("CALENDAR_ONLINE", "nutrivictorafonso@gmail.com")
 
 # === LINKS ===
 LINK_MARINADAS    = os.getenv("LINK_MARINADAS",    "https://nutrivictorafonso.hotmart.host/marinadas-do-nutri-victor-0fd4c29e-6213-49be-be5c-32bffa06db54")
