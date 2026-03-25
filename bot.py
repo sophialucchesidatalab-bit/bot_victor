@@ -25,6 +25,59 @@ def normalizar(texto: str) -> str:
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
+def detectar_opcao_menu(texto_norm: str) -> str | None:
+    """
+    Detecta qual opção do menu o usuário escolheu.
+    Aceita número, emoji numerado ou palavras-chave relacionadas.
+    Retorna "1", "2", "3" ou None.
+    """
+    # Opção 1 — consulta / acompanhamento nutricional
+    if texto_norm in ["1", "1️⃣"]:
+        return "1"
+    if any(x in texto_norm for x in [
+        "consul", "acompanhamento", "nutricional", "nutri", "retorno",
+        "agendar", "agendamento", "informacao", "informacoes", "primeira"
+    ]):
+        return "1"
+
+    # Opção 2 — marinadas
+    if texto_norm in ["2", "2️⃣"]:
+        return "2"
+    if any(x in texto_norm for x in ["marinada", "marinadas", "tempero", "produto"]):
+        return "2"
+
+    # Opção 3 — outros assuntos
+    if texto_norm in ["3", "3️⃣"]:
+        return "3"
+    if any(x in texto_norm for x in ["outro", "outros", "assunto", "duvida", "pergunta"]):
+        return "3"
+
+    return None
+
+
+def detectar_opcao_submenu(texto_norm: str) -> str | None:
+    """
+    Detecta opção do submenu de consulta.
+    Retorna "1", "2", "3" ou None.
+    """
+    if texto_norm in ["1", "1️⃣"]:
+        return "1"
+    if any(x in texto_norm for x in ["primeira", "novo", "nunca fui", "primeira vez"]):
+        return "1"
+
+    if texto_norm in ["2", "2️⃣"]:
+        return "2"
+    if any(x in texto_norm for x in ["retorno", "voltar", "ja fui", "já fui", "segunda"]):
+        return "2"
+
+    if texto_norm in ["3", "3️⃣"]:
+        return "3"
+    if any(x in texto_norm for x in ["outro", "outros", "informacao", "duvida"]):
+        return "3"
+
+    return None
+
+
 def detectar_local(texto: str) -> str | None:
     t = normalizar(texto)
     if any(x in t for x in ["copa", "copacabana"]):
@@ -67,7 +120,7 @@ def processar_mensagem(phone: str, nome: str, texto: str):
 
     # ── PACIENTE NOVO ──────────────────────────────────────────────────────────
     if registro is None:
-        criar_registro(          # ✅ CORRIGIDO: apenas os 3 parâmetros reais
+        criar_registro(
             phone=phone,
             nome=nome,
             etapa=ESTADO_AGUARDA_OPCAO
@@ -92,34 +145,40 @@ def processar_mensagem(phone: str, nome: str, texto: str):
 
     # ── ETAPA 1 — MENU PRINCIPAL ──────────────────────────────────────────────
     if etapa == ESTADO_AGUARDA_OPCAO:
-        if texto_norm in ["1", "1️⃣"]:
+        opcao = detectar_opcao_menu(texto_norm)
+
+        if opcao == "1":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
             enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
 
-        elif texto_norm in ["2", "2️⃣"]:
+        elif opcao == "2":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_MARINADAS)
             enviar_mensagem(phone, msg.MARINADAS)
             enviar_mensagem(VICTOR_PHONE, msg.notif_marinadas(nome_salvo, phone))
             atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
 
-        elif texto_norm in ["3", "3️⃣"]:
+        elif opcao == "3":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
 
         else:
+            # Não reconheceu — pede para escolher novamente SEM repetir menu inteiro
+            enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
             enviar_mensagem(phone, msg.MENU_PRINCIPAL)
 
     # ── ETAPA 2 — SUBMENU ─────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_SUBMENU:
-        if texto_norm in ["1", "1️⃣"]:
+        opcao = detectar_opcao_submenu(texto_norm)
+
+        if opcao == "1":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
             enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
 
-        elif texto_norm in ["2", "2️⃣"]:
+        elif opcao == "2":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
             enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
 
-        elif texto_norm in ["3", "3️⃣"]:
+        elif opcao == "3":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
 
@@ -146,7 +205,7 @@ def processar_mensagem(phone: str, nome: str, texto: str):
         enviar_mensagem(phone, msg.ENCERRAMENTO_BOT)
         enviar_mensagem(
             VICTOR_PHONE,
-            msg.notif_triagem(nome_salvo, phone, local, turno)   # ✅ envia para Victor
+            msg.notif_triagem(nome_salvo, phone, local, turno)
         )
 
     # ── ETAPA — DESCRIÇÃO LIVRE ───────────────────────────────────────────────
@@ -155,7 +214,7 @@ def processar_mensagem(phone: str, nome: str, texto: str):
         enviar_mensagem(phone, msg.CONFIRMACAO_RECEBIMENTO)
         enviar_mensagem(
             VICTOR_PHONE,
-            msg.notif_outro(nome_salvo, phone, texto)            # ✅ envia para Victor
+            msg.notif_outro(nome_salvo, phone, texto)
         )
 
     # ── ETAPA — MARINADAS ─────────────────────────────────────────────────────
