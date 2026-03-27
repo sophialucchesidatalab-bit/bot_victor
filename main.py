@@ -2,6 +2,8 @@ import logging
 import os
 from flask import Flask, request, jsonify
 from bot import processar_mensagem
+from sheets import buscar_estado, criar_registro, atualizar_estado
+from config import ESTADO_ATENDIMENTO_HUMANO
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,26 +31,53 @@ def webhook():
 
         logger.info(f"Webhook recebido: {data}")
 
-        # ── Ignora mensagens enviadas PELO consultório (bot/Victor iniciou) ────
-        # fromMe=True significa que o número do consultório enviou a mensagem
+        # ── Ignora quando consultório inicia a conversa pelo celular ───────────
+        # fromApi=False → mensagem veio do celular físico (Victor), não de um cliente
+        # fromMe=True   → mensagem enviada pelo próprio número via API
+        # Em ambos os casos: registra na planilha como ATENDIMENTO_HUMANO e silencia
+        from_api = data.get("fromApi", True)
         from_me_raw = data.get("fromMe") or data.get("fromme") or data.get("from_me")
         from_me = str(from_me_raw).lower() in ("true", "1", "yes")
-        if from_me:
-            logger.info(f"Ignorado: consultório iniciou conversa (fromMe={from_me_raw})")
-            return jsonify({"status": "ignorado (fromMe)"}), 200
+
+        if from_me or not from_api:
+            phone_temp = data.get("phone", "").strip()
+            nome_temp = (
+                data.get("senderName", "")
+                or data.get("chatName", "")
+                or "Paciente"
+            )
+            if phone_temp:
+                try:
+                    registro_temp = buscar_estado(phone_temp)
+                    if registro_temp is None:
+                        criar_registro(
+                            phone=phone_temp,
+                            nome=nome_temp,
+                            etapa=ESTADO_ATENDIMENTO_HUMANO
+                        )
+                        logger.info(f"Registro criado em ATENDIMENTO_HUMANO para {phone_temp}")
+                    else:
+                        atualizar_estado(
+                            registro_temp.get("row_number"),
+                            etapa=ESTADO_ATENDIMENTO_HUMANO
+                        )
+                        logger.info(f"Atualizado para ATENDIMENTO_HUMANO: {phone_temp}")
+                except Exception as e:
+                    logger.error(f"Erro ao registrar ATENDIMENTO_HUMANO: {e}")
+            return jsonify({"status": "ignorado (consultorio_iniciou)"}), 200
 
         # ── Ignora mensagens de grupos ─────────────────────────────────────────
         if data.get("isGroup") or data.get("isgroup"):
             logger.info("Ignorado: mensagem de grupo")
             return jsonify({"status": "ignorado (grupo)"}), 200
 
-        # ── Ignora tipos que não são texto recebido ────────────────────────────
+        # ── Ignora tipos de mensagem que não são texto ─────────────────────────
         tipo = data.get("type", "")
         if tipo and tipo not in ("ReceivedCallback", ""):
             logger.info(f"Ignorado: tipo={tipo}")
             return jsonify({"status": f"ignorado (tipo={tipo})"}), 200
 
-        # ── Ignora notificações de status sem conteúdo ─────────────────────────
+        # ── Ignora notificações de status de entrega ───────────────────────────
         if data.get("status") and not data.get("text") and not data.get("phone"):
             logger.info("Ignorado: notificação de status sem texto")
             return jsonify({"status": "ignorado (status delivery)"}), 200
@@ -61,7 +90,7 @@ def webhook():
             or "Paciente"
         )
 
-        # ── Extrai texto ───────────────────────────────────────────────────────
+        # ── Extrai o texto da mensagem ─────────────────────────────────────────
         texto = ""
         campo_text = data.get("text")
         if isinstance(campo_text, dict):
