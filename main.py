@@ -29,48 +29,39 @@ def webhook():
 
         logger.info(f"Webhook recebido: {data}")
 
-        # ── Ignora mensagens enviadas pelo próprio bot ─────────────────────────
-        # A Z-API pode enviar fromMe como True, "true" ou 1 — cobre todos os casos
-
-from_me_raw = (
-    data.get("fromMe")
-    or data.get("fromme")
-    or data.get("from_me")
-)
-from_me = str(from_me_raw).lower() in ("true", "1", "yes")
-if from_me:
-    logger.info(f"Ignorado: fromMe={from_me_raw}")
-    return jsonify({"status": "ignorado (fromMe)"}), 200
+        # ── Ignora mensagens enviadas PELO consultório (bot/Victor iniciou) ────
+        # fromMe=True significa que o número do consultório enviou a mensagem
+        from_me_raw = data.get("fromMe") or data.get("fromme") or data.get("from_me")
+        from_me = str(from_me_raw).lower() in ("true", "1", "yes")
+        if from_me:
+            logger.info(f"Ignorado: consultório iniciou conversa (fromMe={from_me_raw})")
+            return jsonify({"status": "ignorado (fromMe)"}), 200
 
         # ── Ignora mensagens de grupos ─────────────────────────────────────────
         if data.get("isGroup") or data.get("isgroup"):
             logger.info("Ignorado: mensagem de grupo")
             return jsonify({"status": "ignorado (grupo)"}), 200
 
-        # ── Ignora tipos de mensagem que não são texto ─────────────────────────
-        # Z-API envia type: "ReceivedCallback" para mensagens recebidas
-        # e outros tipos para status de entrega — ignora tudo que não for texto
+        # ── Ignora tipos que não são texto recebido ────────────────────────────
         tipo = data.get("type", "")
         if tipo and tipo not in ("ReceivedCallback", ""):
             logger.info(f"Ignorado: tipo={tipo}")
             return jsonify({"status": f"ignorado (tipo={tipo})"}), 200
 
-        # ── Ignora notificações de status de entrega ───────────────────────────
-        # Esses payloads chegam com "status" mas sem conteúdo de mensagem
+        # ── Ignora notificações de status sem conteúdo ─────────────────────────
         if data.get("status") and not data.get("text") and not data.get("phone"):
             logger.info("Ignorado: notificação de status sem texto")
             return jsonify({"status": "ignorado (status delivery)"}), 200
 
         # ── Extrai campos principais ───────────────────────────────────────────
         phone = data.get("phone", "").strip()
-        nome  = (
+        nome = (
             data.get("senderName", "")
             or data.get("chatName", "")
             or "Paciente"
         )
 
-        # ── Extrai o texto da mensagem ─────────────────────────────────────────
-        # Z-API pode mandar texto em formatos diferentes
+        # ── Extrai texto ───────────────────────────────────────────────────────
         texto = ""
         campo_text = data.get("text")
         if isinstance(campo_text, dict):
