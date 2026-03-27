@@ -31,10 +31,16 @@ def webhook():
 
         # ── Ignora mensagens enviadas pelo próprio bot ─────────────────────────
         # A Z-API pode enviar fromMe como True, "true" ou 1 — cobre todos os casos
-        from_me = data.get("fromMe") or data.get("fromme") or data.get("from_me")
-        if from_me:
-            logger.info("Ignorado: fromMe=True")
-            return jsonify({"status": "ignorado (fromMe)"}), 200
+
+from_me_raw = (
+    data.get("fromMe")
+    or data.get("fromme")
+    or data.get("from_me")
+)
+from_me = str(from_me_raw).lower() in ("true", "1", "yes")
+if from_me:
+    logger.info(f"Ignorado: fromMe={from_me_raw}")
+    return jsonify({"status": "ignorado (fromMe)"}), 200
 
         # ── Ignora mensagens de grupos ─────────────────────────────────────────
         if data.get("isGroup") or data.get("isgroup"):
