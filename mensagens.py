@@ -1,51 +1,34 @@
 """
-mensagens.py — Textos do bot Victor Afonso Nutricionista
-Padrão exato das mensagens reais do consultório.
+mensagens.py
+Todas as mensagens enviadas pelo bot.
+Strings estáticas + funções para mensagens dinâmicas.
 """
-from config import LINK_MARINADAS
 
-# ════════════════════════════════════════════════════════════
-# IDs ANTI-REPETIÇÃO
-# ════════════════════════════════════════════════════════════
-BLOCO_MENU          = "MENU"
-BLOCO_SUBMENU       = "SUBMENU"
-BLOCO_INFO_CONSULTA = "INFO_CONSULTA"
-BLOCO_TURNO         = "TURNO"
-BLOCO_ENCERRAMENTO  = "ENCERRAMENTO"
-BLOCO_MARINADAS     = "MARINADAS"
-BLOCO_ATENDENTE     = "ATENDENTE"
-BLOCO_DESCRICAO     = "DESCRICAO"
+from config import LINK_QUESTIONARIO, IMG_BIOIMPEDANCIA, ENDERECO
 
-# ════════════════════════════════════════════════════════════
-# MENU PRINCIPAL
-# ════════════════════════════════════════════════════════════
-MENU_PRINCIPAL = """Consultório Nutricionista Victor Afonso, que bom te ver por aí 🙏
+# ─────────────────────────────────────────────
+# MENSAGENS ESTÁTICAS
+# ─────────────────────────────────────────────
 
-Para te ajudar melhor, escolha uma das opções abaixo, por favor.
+MENU_PRINCIPAL = """Olá! 👋 Bem-vindo ao consultório do *Nutri Victor Afonso*!
 
-1️⃣ Informações sobre o acompanhamento nutricional
-2️⃣ Informações sobre as Marinadas do Nutri
+Como posso te ajudar hoje?
+
+1️⃣ Consulta / Acompanhamento Nutricional
+2️⃣ Marinadas do Nutri
 3️⃣ Outros assuntos
 
-E só me responder com 1, 2 ou 3 💚
+_Responda com o número da opção desejada._"""
 
-Em breve nossa atendente irá lhe responder!"""
+SUBMENU_CONSULTA = """Ótimo! Sobre a consulta, você é:
 
-# ════════════════════════════════════════════════════════════
-# SUBMENU CONSULTA
-# ════════════════════════════════════════════════════════════
-SUBMENU_CONSULTA = """Por favor confirmar: 😊
+1️⃣ Paciente novo (primeira consulta)
+2️⃣ Retorno / Acompanhamento
+3️⃣ Tenho outra dúvida
 
-1️⃣ Primeira consulta
-2️⃣ Agendar retorno
-3️⃣ Outras informações"""
+_Responda com o número._"""
 
-# ════════════════════════════════════════════════════════════
-# INFO PRIMEIRA CONSULTA
-# (inclui pergunta do local no final, como o Victor faz)
-# ════════════════════════════════════════════════════════════
 INFO_PRIMEIRA_CONSULTA = """O que está incluso na consulta:
-
 • Anamnese completa, observando os principais pontos que possam estar prejudicando sua performance e/ou saúde
 • Avaliação física (Bioimpedância, Dobras cutâneas e circunferências)
 • Caso necessário, solicitação de exames bioquímicos de acordo com suas queixas clínicas
@@ -61,98 +44,190 @@ O atendimento pode ser feito de 2 formas:
 
 Gostaria de agendar em *Copa*, *Méier* ou *Online*? 😊"""
 
-# ════════════════════════════════════════════════════════════
-# PERGUNTA LOCAL — só para retorno
-# ════════════════════════════════════════════════════════════
+# ── Pergunta de local para retorno (sem info da consulta)
 PERGUNTA_LOCAL = """Gostaria de agendar em *Copa*, *Méier* ou *Online*? 😊"""
 
-# ════════════════════════════════════════════════════════════
-# PERGUNTA TURNO
-# ════════════════════════════════════════════════════════════
-PERGUNTA_TURNO = """Você teria algum turno ou dia da semana de preferência? 📅
+PERGUNTA_TURNO = """Qual turno você prefere para a consulta?
 
 🌅 Manhã
-☀️ Tarde  
+☀️ Tarde
+🌙 Noite
+
+_Responda com o nome do turno._"""
+
+MARINADAS = """🧡 Que ótimo! As *Marinadas do Nutri Victor* são incríveis!
+
+Acesse pelo link abaixo para conhecer e adquirir:
+""" + LINK_QUESTIONARIO  # substitua pelo link de marinadas se necessário
+
+PEDIR_DESCRICAO = """Claro! Me conta um pouco mais sobre o que você precisa e em breve o Nutri Victor entrará em contato. 😊"""
+
+CONFIRMACAO_RECEBIMENTO = """Recebi! ✅ Em breve o Nutri Victor entrará em contato com você. 😊"""
+
+ENCERRAMENTO_BOT = """Entendido! Em breve o *Nutri Victor* entrará em contato para confirmar seu agendamento. 😊"""
+
+ERRO_OPCAO_INVALIDA = """Desculpa, não entendi sua resposta. 😅"""
+
+ERRO_LOCAL_INVALIDO = """Desculpa, não reconheci o local. Por favor, escolha entre:
+
+1️⃣ Copacabana
+2️⃣ Méier
+3️⃣ Online"""
+
+ERRO_TURNO_INVALIDO = """Desculpa, não reconheci o turno. Por favor, escolha entre:
+
+🌅 Manhã
+☀️ Tarde
 🌙 Noite"""
 
-# ════════════════════════════════════════════════════════════
-# ENCERRAMENTO — após receber o turno
-# ════════════════════════════════════════════════════════════
-ENCERRAMENTO_BOT = """Perfeito! 😊✅
+ERRO_HORARIO_NAO_IDENTIFICADO = """Desculpa, não consegui identificar o horário escolhido. 😅
 
-Sua solicitação foi recebida. Nossa atendente entrará em contato em breve para confirmar os detalhes da sua consulta! 💚"""
+Por favor, me informe o *dia e horário* no formato:
+_Sexta 09:00_ ou _02/04 às 14:30_"""
 
-# ════════════════════════════════════════════════════════════
-# MARINADAS
-# ════════════════════════════════════════════════════════════
-MARINADAS = f"""Que ótima escolha! 🥩🔥
+ERRO_CONFIRMACAO_INVALIDA = """Por favor, responda *SIM* para confirmar ou *NÃO* para escolher outro horário."""
 
-As *Marinadas do Nutri* são temperos naturais desenvolvidos pelo próprio Nutri Victor, pensados para deixar sua alimentação mais saborosa e saudável ao mesmo tempo.
+ERRO_SLOTS_EXPIRADOS = """Ops! Os horários precisam ser atualizados. Me informe novamente o turno de preferência:
 
-Clica no link abaixo para conhecer e garantir o seu:
-👉 {LINK_MARINADAS}
+🌅 Manhã
+☀️ Tarde
+🌙 Noite"""
 
-Qualquer dúvida é só chamar, nossa atendente está por aqui! 💚"""
+REAGENDAMENTO = """Sem problema! Vamos escolher outro horário. 😊"""
 
-# ════════════════════════════════════════════════════════════
-# OUTROS ASSUNTOS / ATENDENTE
-# ════════════════════════════════════════════════════════════
-PEDIR_DESCRICAO = """Olá! Fico feliz em te ajudar 😊
+SEM_HORARIOS_DISPONIVEIS = """No momento não há horários disponíveis nesse turno para o local escolhido. 😕
 
-Por favor, me conta um pouco mais sobre o que você precisa. Pode descrever o assunto à vontade que nossa atendente irá te responder em breve! 💚"""
+O *Nutri Victor* entrará em contato em breve para verificar outras opções!"""
 
-AGUARDA_ATENDENTE = """Certo! Nossa atendente vai te responder em breve com todas as informações 💚"""
+FORMULARIO_PRE_CONSULTA = f"""📋 Para nos preparar melhor para a sua consulta, por favor preencha o formulário pré-consulta:
 
-CONFIRMACAO_RECEBIMENTO = """Recebemos sua mensagem! 📩
+{LINK_QUESTIONARIO}"""
 
-Nossa atendente irá te responder em breve. Obrigado pelo contato! 💚"""
+ORIENTACOES_BIO_TEXTO = """Por fim, seguem as orientações para uma avaliação mais assertiva: 👇"""
 
-# ════════════════════════════════════════════════════════════
-# ERROS
-# ════════════════════════════════════════════════════════════
-ERRO_OPCAO_INVALIDA = """Não entendi sua resposta 😅
+ORIENTACOES_BIO_IMAGEM = IMG_BIOIMPEDANCIA
 
-Por favor responda com o número da opção desejada:"""
+ENDERECO_COPA = f"""📍 *Copacabana (Clínica Integra):*
+{ENDERECO['Copacabana']}"""
 
-ERRO_LOCAL_INVALIDO = """Não entendi o local 😅
+ENDERECO_MEIER = f"""📍 *Méier (MaxFit):*
+{ENDERECO['Méier']}"""
 
-Por favor informe: 📍 *Copa*, *Méier* ou 💻 *Online*"""
+# ─────────────────────────────────────────────
+# MENSAGENS DINÂMICAS
+# ─────────────────────────────────────────────
 
-# ════════════════════════════════════════════════════════════
-# ENDEREÇOS
-# ════════════════════════════════════════════════════════════
-ENDERECO_COPA = """📍 *Integra Saúde — Copacabana*
-Praça Serzedelo Corrêa, 15 — sala 703
-Próximo à estação de metrô Siqueira Campos 🚇"""
+def endereco_para_local(local: str) -> str:
+    """Retorna a mensagem de endereço para o local confirmado."""
+    if local == "Copacabana":
+        return f"📍 {ENDERECO['Copacabana']}"
+    if local == "Méier":
+        return f"📍 {ENDERECO['Méier']}"
+    return "📱 O Nutri Victor entrará em contato com as instruções para a consulta online."
 
-ENDERECO_MEIER = """📍 *Academia Max Fit — Méier*
-R. Mario Piragibe, 26 — Méier 🏋️"""
 
-# ════════════════════════════════════════════════════════════
-# NOTIFICAÇÕES PARA VICTOR
-# ════════════════════════════════════════════════════════════
+def confirmacao_agendamento(nome: str, local: str, data: str, dia: str, hora: str) -> str:
+    """Resumo do agendamento pedindo confirmação do lead."""
+    DIAS_PT = {
+        "Seg": "Segunda-feira",
+        "Ter": "Terça-feira",
+        "Qua": "Quarta-feira",
+        "Qui": "Quinta-feira",
+        "Sex": "Sexta-feira",
+        "Sáb": "Sábado",
+        "Dom": "Domingo",
+    }
+    nome_dia = DIAS_PT.get(dia, dia)
+    local_fmt = {
+        "Copacabana": "Copacabana",
+        "Méier":      "Méier",
+        "Online":     "Online",
+    }.get(local, local)
+
+    return (
+        f"Perfeito, *{nome}*! ✅\n\n"
+        f"Confirmo o seguinte agendamento:\n\n"
+        f"📅 *Data:* {nome_dia}, {data}\n"
+        f"⏰ *Horário:* {hora}\n"
+        f"📍 *Local:* {local_fmt}\n\n"
+        f"Está correto? Responda *SIM* para confirmar ou *NÃO* para escolher outro horário."
+    )
+
+
+def confirmacao_final(nome: str, data: str, dia: str, hora: str, endereco: str) -> str:
+    """Mensagem final enviada ao lead após confirmação."""
+    DIAS_PT = {
+        "Seg": "Segunda-feira",
+        "Ter": "Terça-feira",
+        "Qua": "Quarta-feira",
+        "Qui": "Quinta-feira",
+        "Sex": "Sexta-feira",
+        "Sáb": "Sábado",
+        "Dom": "Domingo",
+    }
+    nome_dia = DIAS_PT.get(dia, dia)
+
+    return (
+        f"Certo, *{nome}*! 🎉\n\n"
+        f"Sua consulta está confirmada:\n\n"
+        f"📅 *{nome_dia}, {data}*\n"
+        f"⏰ *{hora}*\n"
+        f"{endereco}\n\n"
+        f"Qualquer dúvida, estamos à disposição! 😊"
+    )
+
+
+def notif_consulta_marcada(nome: str, phone: str, local: str, data: str, hora: str) -> str:
+    """Notificação enviada ao Victor quando uma consulta é confirmada."""
+    return (
+        f"📌 *Consulta marcada!*\n\n"
+        f"👤 *Nome:* {nome}\n"
+        f"📞 *Telefone:* {phone}\n"
+        f"📍 *Local:* {local}\n"
+        f"📅 *Data:* {data}\n"
+        f"⏰ *Horário:* {hora}"
+    )
+
+
 def notif_triagem(nome: str, phone: str, local: str, turno: str) -> str:
     return (
-        f"📋 *Nova solicitação de consulta!*\n\n"
-        f"*Nome:* {nome}\n"
-        f"*Telefone:* {phone}\n"
-        f"*Local:* {local}\n"
-        f"*Horário de preferência:* {turno}\n\n"
-        f"Entre em contato para confirmar os detalhes! 💚"
+        f"📋 *Nova triagem recebida!*\n\n"
+        f"👤 *Nome:* {nome}\n"
+        f"📞 *Telefone:* {phone}\n"
+        f"📍 *Local:* {local}\n"
+        f"🕐 *Turno:* {turno}\n\n"
+        f"_Sem horários disponíveis no turno pedido — verificar manualmente._"
     )
 
-def notif_outro(nome: str, phone: str, assunto: str) -> str:
-    return (
-        f"📬 *Nova mensagem recebida!*\n\n"
-        f"*De:* {nome} — {phone}\n"
-        f"*Assunto:* {assunto}\n\n"
-        f"Responda diretamente pelo WhatsApp 💚"
-    )
 
 def notif_marinadas(nome: str, phone: str) -> str:
     return (
-        f"🥩 *Interesse nas Marinadas!*\n\n"
-        f"*Paciente:* {nome}\n"
-        f"*Telefone:* {phone}\n\n"
-        f"O link foi enviado automaticamente 💚"
+        f"🛒 *Interesse em Marinadas!*\n\n"
+        f"👤 *Nome:* {nome}\n"
+        f"📞 *Telefone:* {phone}"
+    )
+
+
+def notif_outro(nome: str, phone: str, descricao: str) -> str:
+    return (
+        f"💬 *Nova mensagem recebida!*\n\n"
+        f"👤 *Nome:* {nome}\n"
+        f"📞 *Telefone:* {phone}\n"
+        f"📝 *Mensagem:* {descricao}"
+    )
+
+# Mensagem quando lead diz "depois confirmo"
+AGUARDA_CONFIRMACAO_DEPOIS = (
+    "Sem problema! 😊 Quando quiser confirmar é só me chamar aqui. "
+    "O *Nutri Victor* também pode entrar em contato para verificar a disponibilidade."
+)
+
+def notif_decide_depois(nome: str, phone: str, local: str) -> str:
+    """Notifica Victor que o lead quer decidir o horário depois."""
+    return (
+        f"⏳ *Lead quer confirmar depois*\n\n"
+        f"👤 *Nome:* {nome}\n"
+        f"📞 *Telefone:* {phone}\n"
+        f"📍 *Local:* {local}\n\n"
+        f"_Horários foram apresentados mas o lead não confirmou ainda._"
     )
