@@ -343,10 +343,9 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
             enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
         elif opcao == "2":
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_MARINADAS)
+            atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO)
             enviar_mensagem(phone, msg.MARINADAS)
             enviar_mensagem(VICTOR_PHONE, msg.notif_marinadas(nome_salvo, phone))
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
         elif opcao == "3":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
