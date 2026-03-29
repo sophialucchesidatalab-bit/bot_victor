@@ -89,14 +89,14 @@ O lead enviou a seguinte mensagem:
 Extraia o local e o turno mencionados.
 
 Locais válidos: "Méier", "Copacabana", "Online"
-- Méier = méier, max, maxfit, academia, na max, na academia
-- Copacabana = copa, copacabana, em copa, integra
-- Online = online, remoto, virtual, meet, videochamada
+- Méier = méier, meier, max, maxfit, academia, na max, na academia, na maxfit
+- Copacabana = copa, copacabana, em copa, integra, na copa
+- Online = online, remoto, virtual, meet, videochamada, pelo meet
 
 Turnos válidos: "Manhã", "Tarde", "Noite"
-- Manhã = manhã, manha, de manhã, pela manhã, cedo, matutino
-- Tarde = tarde, de tarde, pela tarde
-- Noite = noite, de noite, pela noite
+- Manhã = manhã, manha, de manhã, de manha, pela manhã, pela manha, cedo, matutino, antes do meio-dia, de manhãzinha
+- Tarde = tarde, de tarde, pela tarde, após o almoço, depois do almoço, 12h-17h
+- Noite = noite, de noite, pela noite, à noite, a noite, após as 18h, depois das 18h
 
 Responda APENAS com JSON no formato:
 {{"local": "Méier", "turno": "Tarde"}}
@@ -153,10 +153,14 @@ def extrair_horario_escolhido(texto: str, slots_disponiveis: list[dict]) -> dict
         texto: mensagem do lead (ex: "sexta às 9", "quarta 14:30", "dia 4 de manhã")
         slots_disponiveis: lista de dicts com data, dia, hora_inicio
 
-    Retorna o dict do slot escolhido ou None.
+    Retorna o dict do slot escolhido, "PERGUNTA" se for uma pergunta, ou None.
     """
     if not slots_disponiveis:
         return None
+
+    # Remove formatação do WhatsApp (*negrito*, _itálico_) antes de processar
+    import re as _re
+    texto = _re.sub(r"[*_~]", "", texto).strip()
 
     # Formata lista de slots para o prompt
     lista_slots = "\n".join([
@@ -166,40 +170,75 @@ def extrair_horario_escolhido(texto: str, slots_disponiveis: list[dict]) -> dict
 
     prompt = f"""{CONTEXTO_VICTOR}
 
-O lead escolheu um horário com a mensagem:
+O lead respondeu com a seguinte mensagem:
 "{texto}"
 
 Os horários disponíveis são:
 {lista_slots}
 
-Identifique qual horário o lead quer. Considere variações como:
-- "sexta" = dia da semana
-- "9h", "9:00", "nove horas" = hora
-- "dia 4" = data
-- "amanhã", "semana que vem" = referências relativas
+TAREFA: Identifique qual horário o lead quer agendar.
 
-Responda APENAS com JSON no formato:
-{{"dia": "Sex", "data": "04/04/2026", "hora_inicio": "09:00"}}
+Exemplos de como o lead pode escrever:
+- "sexta as 9h" ou "sexta, as 9h" ou "sexta 9" → dia=Sex, hora=09:00
+- "quarta 10:30" ou "quarta às 10h30" → dia=Qua, hora=10:30
+- "03/04 às 9:00" ou "dia 3 de abril 9h" → data=03/04/2026, hora=09:00
+- "9h" sozinho → procura 09:00 na lista
+- "10 horas" ou "dez horas" → hora=10:00
+- "9h30" ou "9:30" → hora=09:30
 
-ou {{"slot": null}} se não conseguir identificar.
+CONVERSÕES IMPORTANTES:
+- "9h" = "09:00"
+- "9h30" = "09:30"  
+- "10h" = "10:00"
+- "11h30" = "11:30"
+
+PERGUNTAS ABERTAS — se o lead perguntou algo em vez de escolher, retorne null:
+- "tem às 13h?" → está perguntando, não escolhendo → slot=null
+- "tem sábado?" → está perguntando → slot=null
+- "qual o primeiro horário?" → está perguntando → slot=null
+
+Se há dois dias iguais disponíveis (ex: duas sextas) e o lead não especificou a data, escolha a mais próxima (menor data).
+
+Responda APENAS com JSON:
+Se identificou: {{"dia": "Sex", "data": "03/04/2026", "hora_inicio": "09:00"}}
+Se pergunta ou não identificou: {{"slot": null, "pergunta": true}}
 
 Nenhum texto além do JSON."""
 
     resultado = _chamar_claude(prompt)
-    if not resultado or resultado.get("slot") is None and not resultado.get("hora_inicio"):
+    if not resultado:
         return None
+
+    # Lead fez uma pergunta em vez de escolher
+    if resultado.get("pergunta") or resultado.get("slot") is None:
+        if resultado.get("hora_inicio") is None and resultado.get("data") is None:
+            return "PERGUNTA"
 
     # Casa com o slot real da lista
     hora_extraida = resultado.get("hora_inicio")
     data_extraida = resultado.get("data")
     dia_extraido  = resultado.get("dia")
 
+    if not hora_extraida:
+        return None
+
+    # Normaliza hora para comparação: "9:00" → "09:00"
+    def norm_hora(h):
+        if not h:
+            return h
+        partes = h.strip().split(":")
+        return f"{int(partes[0]):02d}:{partes[1] if len(partes) > 1 else '00'}"
+
+    hora_norm = norm_hora(hora_extraida)
+
     for slot in slots_disponiveis:
-        if data_extraida and slot["data"] == data_extraida and slot["hora_inicio"] == hora_extraida:
+        slot_hora_norm = norm_hora(slot["hora_inicio"])
+        if data_extraida and slot["data"] == data_extraida and slot_hora_norm == hora_norm:
             return slot
-        if dia_extraido and slot["dia"] == dia_extraido and slot["hora_inicio"] == hora_extraida:
+        if dia_extraido and slot["dia"] == dia_extraido and slot_hora_norm == hora_norm:
             return slot
 
+    # Encontrou hora mas não casou com nenhum slot disponível
     return None
 
 
