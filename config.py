@@ -23,7 +23,7 @@ AGENDA_SPREADSHEET_ID = os.getenv(
 )
 
 # === LINKS ===
-LINK_MARINADAS    = os.getenv("LINK_MARINADAS",    "https://nutrivictorafonso.hotmart.host/marinadas-do-nutri-victor-0fd4c29e-6213-49be-be5c-32bffa06db54")
+LINK_MARINADAS    = os.getenv("LINK_MARINADAS",    "https://hotmart.com/en/club/victor-da-cruz-afonso/products/6881968/content/y4bpWblP7R")
 LINK_QUESTIONARIO = os.getenv("LINK_QUESTIONARIO", "https://forms.gle/FfkdcGTq48fK6jjr7")
 
 # === IMAGENS ===
