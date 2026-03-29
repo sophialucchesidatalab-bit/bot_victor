@@ -17,6 +17,13 @@ from config import (
 from sheets import buscar_estado, criar_registro, atualizar_estado
 from sheets_agenda import buscar_horarios, remover_horario_confirmado
 from zapi import enviar_mensagem, enviar_imagem
+from claude_nlu import (
+    extrair_opcao_menu,
+    extrair_local_e_turno,
+    extrair_local,
+    extrair_turno,
+    extrair_horario_escolhido,
+)
 import mensagens as msg
 
 logger = logging.getLogger(__name__)
@@ -36,7 +43,15 @@ def normalizar(texto):
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
-def detectar_opcao_menu(t):
+def detectar_opcao_menu(t, texto_original=""):
+    # Tenta com Claude primeiro
+    try:
+        opcao = extrair_opcao_menu(texto_original or t)
+        if opcao:
+            return opcao
+    except Exception:
+        pass
+    # Fallback: regex
     if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
     if any(x in t for x in ["consul","acompanhamento","nutricional","nutri","retorno","agendar","agendamento","informacao","informacoes","primeira"]): return "1"
     if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
@@ -57,6 +72,14 @@ def detectar_opcao_submenu(t):
 
 
 def detectar_local(texto):
+    # Tenta com Claude primeiro
+    try:
+        local = extrair_local(texto)
+        if local:
+            return local
+    except Exception:
+        pass
+    # Fallback: regex
     t = normalizar(texto)
     if any(x in t for x in ["copa","copacabana","em copa"]):
         return "Copacabana"
@@ -68,6 +91,14 @@ def detectar_local(texto):
 
 
 def detectar_turno(texto):
+    # Tenta com Claude primeiro
+    try:
+        turno = extrair_turno(texto)
+        if turno:
+            return turno
+    except Exception:
+        pass
+    # Fallback: regex
     t = normalizar(texto)
     if "manha" in t: return "Manhã"
     if "tarde" in t: return "Tarde"
@@ -147,6 +178,14 @@ def formatar_horarios_para_mensagem(slots, local_bot):
 
 
 def identificar_slot_escolhido(texto, slots):
+    # Tenta com Claude primeiro
+    try:
+        slot = extrair_horario_escolhido(texto, slots)
+        if slot:
+            return slot
+    except Exception:
+        pass
+    # Fallback: regex
     t = normalizar(texto)
     DIAS_NORM = {
         "quarta":"Qua","quinta":"Qui","sexta":"Sex",
@@ -212,7 +251,7 @@ def processar_mensagem(phone, nome, texto):
 
     # ── MENU PRINCIPAL ────────────────────────────────────────────────────────
     if etapa == ESTADO_AGUARDA_OPCAO:
-        opcao = detectar_opcao_menu(texto_norm)
+        opcao = detectar_opcao_menu(texto_norm, texto)
         if opcao == "1":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
             enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
@@ -246,6 +285,13 @@ def processar_mensagem(phone, nome, texto):
 
     # ── LOCAL ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_LOCAL:
+        # Se perguntou endereço antes de escolher local → mostra os dois
+        if detectar_endereco(texto_norm):
+            enviar_mensagem(phone, msg.ENDERECO_COPA)
+            enviar_mensagem(phone, msg.ENDERECO_MEIER)
+            enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
+            return
+
         local_detectado = detectar_local(texto)
         if local_detectado:
             atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_detectado)
