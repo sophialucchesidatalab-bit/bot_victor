@@ -68,6 +68,10 @@ ENCERRAMENTO_BOT = """Entendido! Em breve o *Nutri Victor* entrará em contato p
 
 ERRO_OPCAO_INVALIDA = """Desculpa, não entendi sua resposta. 😅"""
 
+ERRO_DIA_BLOQUEADO = """O Nutri atende somente de *quarta-feira a sábado*. 😊
+
+Por favor, escolha um dia disponível na lista acima."""
+
 ERRO_LOCAL_INVALIDO = """Desculpa, não reconheci o local. Por favor, escolha entre:
 
 1️⃣ Copacabana
