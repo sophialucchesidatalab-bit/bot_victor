@@ -1,36 +1,49 @@
-import requests
+"""
+zapi.py
+Funções de envio via Z-API (WhatsApp).
+"""
+
 import logging
+import requests
 from config import ZAPI_BASE_URL, ZAPI_CLIENT_TOKEN
 
 logger = logging.getLogger(__name__)
 
-def enviar_mensagem(phone: str, mensagem: str) -> bool:
-    """Envia mensagem de texto via Z-API."""
+HEADERS = {"Content-Type": "application/json"}
+if ZAPI_CLIENT_TOKEN:
+    HEADERS["Client-Token"] = ZAPI_CLIENT_TOKEN
+
+
+def enviar_mensagem(phone: str, texto: str) -> bool:
+    """Envia mensagem de texto simples."""
     url = f"{ZAPI_BASE_URL}/send-text"
-    payload = {
-        "phone": str(phone).strip(),
-        "message": (mensagem or "").strip()
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Client-Token": ZAPI_CLIENT_TOKEN
-    }
-
+    payload = {"phone": phone, "message": texto}
     try:
-        if not payload["message"]:
-            logger.error(f"Mensagem vazia para {phone}. Payload não enviado.")
-            return False
-
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-
-        logger.info(f"Z-API status={response.status_code}")
-        logger.info(f"Z-API resposta={response.text}")
-
-        response.raise_for_status()
+        resp = requests.post(url, json=payload, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
         logger.info(f"Mensagem enviada para {phone}")
         return True
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem para {phone}: {e}")
+        return False
 
-    except requests.RequestException as e:
-        body = getattr(response, "text", "sem corpo de resposta") if "response" in locals() else "sem resposta"
-        logger.error(f"Erro ao enviar mensagem para {phone}: {e} | body={body} | payload={payload}")
+
+def enviar_imagem(phone: str, url_imagem: str, caption: str = "") -> bool:
+    """
+    Envia imagem via URL pública.
+    A Z-API baixa a imagem do URL e envia para o WhatsApp.
+    """
+    url = f"{ZAPI_BASE_URL}/send-image"
+    payload = {
+        "phone":   phone,
+        "image":   url_imagem,
+        "caption": caption,
+    }
+    try:
+        resp = requests.post(url, json=payload, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        logger.info(f"Imagem enviada para {phone}: {url_imagem}")
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao enviar imagem para {phone}: {e}")
         return False
