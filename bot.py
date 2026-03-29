@@ -181,6 +181,10 @@ def formatar_horarios_para_mensagem(slots, local_bot):
 
 
 def identificar_slot_escolhido(texto, slots):
+    # Remove formatação WhatsApp (*negrito*, _itálico_)
+    import re as _re
+    texto = _re.sub(r"[*_~]", "", texto).strip()
+
     # Tenta com Claude primeiro
     try:
         slot = extrair_horario_escolhido(texto, slots)
