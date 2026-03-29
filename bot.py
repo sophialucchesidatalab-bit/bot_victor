@@ -100,9 +100,12 @@ def detectar_turno(texto):
         pass
     # Fallback: regex
     t = normalizar(texto)
-    if "manha" in t: return "Manhã"
-    if "tarde" in t: return "Tarde"
-    if "noite" in t: return "Noite"
+    if any(x in t for x in ["manha", "de manha", "pela manha", "cedo", "matutino"]):
+        return "Manhã"
+    if any(x in t for x in ["tarde", "de tarde", "pela tarde"]):
+        return "Tarde"
+    if any(x in t for x in ["noite", "de noite", "pela noite"]):
+        return "Noite"
     return None
 
 
@@ -181,6 +184,8 @@ def identificar_slot_escolhido(texto, slots):
     # Tenta com Claude primeiro
     try:
         slot = extrair_horario_escolhido(texto, slots)
+        if slot == "PERGUNTA":
+            return "PERGUNTA"
         if slot:
             return slot
     except Exception:
@@ -192,7 +197,7 @@ def identificar_slot_escolhido(texto, slots):
         "sabado":"Sáb","segunda":"Seg","terca":"Ter","domingo":"Dom",
     }
     import re
-    hora_match = re.search(r"(\d{1,2})[h:](\d{2})?", t)
+    hora_match = re.search(r"(\d{1,2})[\s]*[hH:][\s]*(\d{2})?", t)
     hora_str = None
     if hora_match:
         h = int(hora_match.group(1))
@@ -220,6 +225,65 @@ def identificar_slot_escolhido(texto, slots):
         if match_data and match_hora: return slot
         if match_dia  and match_hora: return slot
     return None
+
+
+def responder_pergunta_horario(texto, slots, local_bot):
+    """
+    Quando o lead faz uma pergunta sobre horários (ex: "tem às 13h?", "tem sábado?"),
+    verifica na lista e responde de forma inteligente.
+    """
+    import re
+    t = normalizar(texto)
+
+    DIAS_NORM = {
+        "quarta": "Qua", "quinta": "Qui", "sexta": "Sex",
+        "sabado": "Sáb", "segunda": "Seg", "terca": "Ter",
+    }
+
+    # Extrai hora da pergunta
+    hora_match = re.search(r"(\d{1,2})[\s]*[hH:][\s]*(\d{2})?", t)
+    hora_str = None
+    if hora_match:
+        h = int(hora_match.group(1))
+        m = int(hora_match.group(2) or 0)
+        hora_str = f"{h:02d}:{m:02d}"
+
+    # Extrai dia da pergunta
+    dia_abrev = None
+    for nome_dia, abrev in DIAS_NORM.items():
+        if nome_dia in t:
+            dia_abrev = abrev
+            break
+
+    # Filtra slots que batem com a pergunta
+    slots_encontrados = []
+    for slot in slots:
+        match_hora = hora_str and slot["hora_inicio"] == hora_str
+        match_dia  = dia_abrev and slot["dia"] == dia_abrev
+        if hora_str and dia_abrev:
+            if match_hora and match_dia:
+                slots_encontrados.append(slot)
+        elif hora_str:
+            if match_hora:
+                slots_encontrados.append(slot)
+        elif dia_abrev:
+            if match_dia:
+                slots_encontrados.append(slot)
+
+    if slots_encontrados:
+        if len(slots_encontrados) == 1:
+            s = slots_encontrados[0]
+            return (
+                f"Sim! Tenho disponível *{s['dia']} ({s['data']}) às {s['hora_inicio']}*. "
+                f"Deseja confirmar esse horário?"
+            )
+        else:
+            opcoes = "\n".join([f"• {s['dia']} ({s['data']}) às {s['hora_inicio']}" for s in slots_encontrados])
+            return f"Sim! Tenho os seguintes horários disponíveis:\n\n{opcoes}\n\nQual prefere?"
+    else:
+        # Não tem esse horário — mostra o que tem
+        mensagem_horarios = formatar_horarios_para_mensagem(slots, local_bot)
+        return f"Infelizmente não tenho esse horário disponível. 😕\n\n{mensagem_horarios}"
 
 
 def processar_mensagem(phone, nome, texto):
@@ -345,6 +409,13 @@ def processar_mensagem(phone, nome, texto):
             return
 
         slot_escolhido = identificar_slot_escolhido(texto, slots)
+
+        if slot_escolhido == "PERGUNTA":
+            # Lead fez uma pergunta (ex: "tem às 13h?", "tem sábado?")
+            # Verifica se o horário perguntado existe na lista
+            resposta = responder_pergunta_horario(texto, slots, local)
+            enviar_mensagem(phone, resposta)
+            return
 
         if not slot_escolhido:
             enviar_mensagem(phone, msg.ERRO_HORARIO_NAO_IDENTIFICADO)
