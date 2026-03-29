@@ -501,9 +501,13 @@ def processar_mensagem(phone, nome, texto):
 
     # ── DESCRIÇÃO LIVRE ───────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_DESCRICAO:
-        # Lead enviou a explicação do "outro assunto" → encaminha ao Victor
+        # Claude responde a dúvida antes de passar para o Victor
+        from claude_nlu import processar_mensagem_livre
+        resposta_claude = processar_mensagem_livre(texto)
+        enviar_mensagem(phone, resposta_claude)
+
+        # Notifica Victor e passa para atendimento humano
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
-        enviar_mensagem(phone, msg.CONFIRMACAO_RECEBIMENTO)
         enviar_mensagem(VICTOR_PHONE, msg.notif_outro(nome_salvo, phone, texto))
 
     # ── MARINADAS ─────────────────────────────────────────────────────────────
