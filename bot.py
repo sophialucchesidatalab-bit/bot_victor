@@ -94,6 +94,12 @@ def detectar_depois_confirmo(texto):
     ])
 
 
+def detectar_dia_bloqueado(texto):
+    """Retorna True se o lead mencionou um dia em que Victor não atende."""
+    t = normalizar(texto)
+    return any(x in t for x in ["segunda","seg","terca","ter","domingo","dom"])
+
+
 def detectar_endereco(texto):
     t = normalizar(texto)
     return any(x in t for x in [
@@ -269,6 +275,11 @@ def processar_mensagem(phone, nome, texto):
     # ── ESCOLHA DO HORÁRIO ────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_HORARIO:
         import json as _json
+
+        # Lead mencionou dia bloqueado
+        if detectar_dia_bloqueado(texto):
+            enviar_mensagem(phone, msg.ERRO_DIA_BLOQUEADO)
+            return
 
         # Lead quer decidir depois
         if detectar_depois_confirmo(texto):
