@@ -25,6 +25,7 @@ from claude_nlu import (
     extrair_horario_escolhido,
 )
 import mensagens as msg
+from mensagens import erro_nao_entendi
 
 logger = logging.getLogger(__name__)
 
@@ -285,9 +286,27 @@ def responder_pergunta_horario(texto, slots, local_bot):
             opcoes = "\n".join([f"• {s['dia']} ({s['data']}) às {s['hora_inicio']}" for s in slots_encontrados])
             return f"Sim! Tenho os seguintes horários disponíveis:\n\n{opcoes}\n\nQual prefere?"
     else:
-        # Não tem esse horário — mostra o que tem
-        mensagem_horarios = formatar_horarios_para_mensagem(slots, local_bot)
-        return f"Infelizmente não tenho esse horário disponível. 😕\n\n{mensagem_horarios}"
+        # Não tem o horário pedido — verifica se perguntou sobre sábado
+        if dia_abrev == "Sáb":
+            # Busca o sábado mais próximo em TODOS os slots disponíveis na planilha
+            from sheets_agenda import buscar_todos_slots_sabado
+            slots_sab = buscar_todos_slots_sabado(local_bot)
+            if slots_sab:
+                # Pega o sábado mais próximo (primeiro da lista ordenada)
+                primeira_data_sab = slots_sab[0]["data"]
+                slots_prox_sab = [s for s in slots_sab if s["data"] == primeira_data_sab]
+                horarios = "; ".join([s["hora_inicio"] for s in slots_prox_sab])
+                return (
+                    f"O próximo sábado disponível é *Sáb ({primeira_data_sab})*:\n\n"
+                    f"{horarios}\n\nDeseja um desses horários?"
+                )
+            else:
+                mensagem_horarios = formatar_horarios_para_mensagem(slots, local_bot)
+                return f"Não tenho horários de sábado disponíveis no momento. 😕\n\n{mensagem_horarios}"
+        else:
+            # Não tem o horário pedido — mostra os disponíveis
+            mensagem_horarios = formatar_horarios_para_mensagem(slots, local_bot)
+            return f"Infelizmente não tenho esse horário disponível. 😕\n\n{mensagem_horarios}"
 
 
 def processar_mensagem(phone, nome, texto):
@@ -332,8 +351,7 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
         else:
-            enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
-            enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+            enviar_mensagem(phone, erro_nao_entendi(etapa))
 
     # ── SUBMENU ───────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_SUBMENU:
@@ -348,8 +366,7 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
         else:
-            enviar_mensagem(phone, msg.ERRO_OPCAO_INVALIDA)
-            enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
+            enviar_mensagem(phone, erro_nao_entendi(etapa))
 
     # ── LOCAL ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_LOCAL:
@@ -365,13 +382,13 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_detectado)
             enviar_mensagem(phone, msg.PERGUNTA_TURNO)
         else:
-            enviar_mensagem(phone, msg.ERRO_LOCAL_INVALIDO)
+            enviar_mensagem(phone, erro_nao_entendi(etapa))
 
     # ── TURNO ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_TURNO:
         turno = detectar_turno(texto)
         if not turno:
-            enviar_mensagem(phone, msg.ERRO_TURNO_INVALIDO)
+            enviar_mensagem(phone, erro_nao_entendi(etapa))
             return
 
         slots = buscar_horarios(local, turno)
@@ -422,7 +439,7 @@ def processar_mensagem(phone, nome, texto):
             return
 
         if not slot_escolhido:
-            enviar_mensagem(phone, msg.ERRO_HORARIO_NAO_IDENTIFICADO)
+            enviar_mensagem(phone, erro_nao_entendi(etapa))
             enviar_mensagem(phone, formatar_horarios_para_mensagem(slots, local))
             return
 
@@ -444,7 +461,7 @@ def processar_mensagem(phone, nome, texto):
         confirmado = detectar_confirmacao(texto)
 
         if confirmado is None:
-            enviar_mensagem(phone, msg.ERRO_CONFIRMACAO_INVALIDA)
+            enviar_mensagem(phone, erro_nao_entendi(etapa))
             return
 
         try:
