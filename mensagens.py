@@ -68,6 +68,49 @@ ENCERRAMENTO_BOT = """Entendido! Em breve o *Nutri Victor* entrará em contato p
 
 ERRO_OPCAO_INVALIDA = """Desculpa, não entendi sua resposta. 😅"""
 
+# ── Mensagens contextuais de "não entendi" ────────────────────────────────────
+
+def erro_nao_entendi(etapa: str) -> str:
+    """Retorna mensagem de erro contextual repetindo a última pergunta."""
+    PERGUNTAS = {
+        "AGUARDA_OPCAO": (
+            "Desculpe, não entendi o que você quis dizer. 😅\n\n"
+            "Como posso te ajudar?\n\n"
+            "1️⃣ Consulta / Acompanhamento Nutricional\n"
+            "2️⃣ Marinadas do Nutri\n"
+            "3️⃣ Outros assuntos"
+        ),
+        "AGUARDA_SUBMENU": (
+            "Desculpe, não entendi o que você quis dizer. 😅\n\n"
+            "Você é:\n\n"
+            "1️⃣ Paciente novo (primeira consulta)\n"
+            "2️⃣ Retorno / Acompanhamento\n"
+            "3️⃣ Tenho outra dúvida"
+        ),
+        "AGUARDA_LOCAL": (
+            "Desculpe, não entendi o que você quis dizer. 😅\n\n"
+            "Gostaria de agendar em *Copa*, *Méier* ou *Online*?"
+        ),
+        "AGUARDA_TURNO": (
+            "Desculpe, não entendi o que você quis dizer. 😅\n\n"
+            "Qual turno você prefere?\n\n"
+            "🌅 Manhã\n"
+            "☀️ Tarde\n"
+            "🌙 Noite"
+        ),
+        "AGUARDA_HORARIO": (
+            "Desculpe, não entendi o que você quis dizer. 😅\n\n"
+            "Me informe o *dia e horário* de sua preferência.\n"
+            "_Exemplo: Sexta 09:00 ou 04/04 às 10:30_"
+        ),
+        "AGUARDA_CONFIRMACAO": (
+            "Desculpe, não entendi o que você quis dizer. 😅\n\n"
+            "Por favor, responda *SIM* para confirmar ou *NÃO* para escolher outro horário."
+        ),
+    }
+    return PERGUNTAS.get(etapa, "Desculpe, não entendi o que você quis dizer. 😅\nPode repetir?")
+
+
 ERRO_DIA_BLOQUEADO = """O Nutri atende somente de *quarta-feira a sábado*. 😊
 
 Por favor, escolha um dia disponível na lista acima."""
