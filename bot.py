@@ -112,9 +112,19 @@ def detectar_turno(texto):
 
 def detectar_confirmacao(texto):
     t = normalizar(texto)
-    if any(x in t for x in ["sim","confirmo","confirmar","isso","correto","certo","ok"]):
+    if any(x in t for x in [
+        "sim", "confirmo", "confirmar", "confirmado", "correto", "certo",
+        "isso", "ok", "pode", "pode ser", "fechado", "combinado",
+        "perfeito", "exato", "exatamente", "isso mesmo", "show"
+    ]):
         return True
-    if any(x in t for x in ["nao","não","errado","incorreto","cancelar"]):
+    if any(x in t for x in [
+        "nao", "não", "errado", "incorreto", "cancelar", "cancela",
+        "mudar", "outro", "diferente", "trocar",
+        "vou ver", "vou pensar", "deixa eu ver", "depois confirmo",
+        "confirmo depois", "confirmo amanha", "confirmo depois",
+        "te aviso", "aviso depois", "amanha", "depois te falo"
+    ]):
         return False
     return None
 
