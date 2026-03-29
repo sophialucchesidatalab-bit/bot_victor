@@ -21,9 +21,6 @@ def health():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """
-    Endpoint que recebe as mensagens da Z-API.
-    """
     try:
         data = request.get_json(silent=True)
         if not data:
@@ -31,15 +28,17 @@ def webhook():
 
         logger.info(f"Webhook recebido: {data}")
 
-        # ── Ignora quando consultório inicia a conversa pelo celular ───────────
-        # fromApi=False → mensagem veio do celular físico (Victor), não de um cliente
-        # fromMe=True   → mensagem enviada pelo próprio número via API
-        # Em ambos os casos: registra na planilha como ATENDIMENTO_HUMANO e silencia
-        from_api = data.get("fromApi", True)
+        # ── Ignora notificações de status (sem texto e sem phone) ──────────────
+        if data.get("type") == "MessageStatusCallback":
+            return jsonify({"status": "ignorado (status callback)"}), 200
+
+        # ── Detecta se foi o Victor enviando do celular físico ─────────────────
+        # fromMe=True significa que o número conectado na Z-API enviou a mensagem
+        # Isso acontece quando Victor responde manualmente pelo celular
         from_me_raw = data.get("fromMe") or data.get("fromme") or data.get("from_me")
         from_me = str(from_me_raw).lower() in ("true", "1", "yes")
 
-        if from_me or not from_api:
+        if from_me:
             phone_temp = data.get("phone", "").strip()
             nome_temp = (
                 data.get("senderName", "")
@@ -64,23 +63,18 @@ def webhook():
                         logger.info(f"Atualizado para ATENDIMENTO_HUMANO: {phone_temp}")
                 except Exception as e:
                     logger.error(f"Erro ao registrar ATENDIMENTO_HUMANO: {e}")
-            return jsonify({"status": "ignorado (consultorio_iniciou)"}), 200
+            return jsonify({"status": "ignorado (victor_enviou)"}), 200
 
         # ── Ignora mensagens de grupos ─────────────────────────────────────────
         if data.get("isGroup") or data.get("isgroup"):
             logger.info("Ignorado: mensagem de grupo")
             return jsonify({"status": "ignorado (grupo)"}), 200
 
-        # ── Ignora tipos de mensagem que não são texto ─────────────────────────
+        # ── Ignora tipos que não são texto recebido ────────────────────────────
         tipo = data.get("type", "")
         if tipo and tipo not in ("ReceivedCallback", ""):
             logger.info(f"Ignorado: tipo={tipo}")
             return jsonify({"status": f"ignorado (tipo={tipo})"}), 200
-
-        # ── Ignora notificações de status de entrega ───────────────────────────
-        if data.get("status") and not data.get("text") and not data.get("phone"):
-            logger.info("Ignorado: notificação de status sem texto")
-            return jsonify({"status": "ignorado (status delivery)"}), 200
 
         # ── Extrai campos principais ───────────────────────────────────────────
         phone = data.get("phone", "").strip()
@@ -90,7 +84,7 @@ def webhook():
             or "Paciente"
         )
 
-        # ── Extrai o texto da mensagem ─────────────────────────────────────────
+        # ── Extrai o texto ─────────────────────────────────────────────────────
         texto = ""
         campo_text = data.get("text")
         if isinstance(campo_text, dict):
@@ -98,7 +92,6 @@ def webhook():
         elif isinstance(campo_text, str):
             texto = campo_text.strip()
 
-        # ── Ignora se não tiver phone ou texto ─────────────────────────────────
         if not phone:
             logger.info("Ignorado: sem phone")
             return jsonify({"status": "ignorado (sem phone)"}), 200
