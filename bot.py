@@ -23,6 +23,7 @@ from claude_nlu import (
     extrair_local,
     extrair_turno,
     extrair_horario_escolhido,
+    extrair_confirmacao,
 )
 import mensagens as msg
 from mensagens import erro_nao_entendi
@@ -111,19 +112,25 @@ def detectar_turno(texto):
 
 
 def detectar_confirmacao(texto):
+    # Tenta com Claude primeiro — entende qualquer variação informal
+    try:
+        resultado = extrair_confirmacao(texto)
+        if resultado is not None:
+            return resultado
+    except Exception:
+        pass
+    # Fallback: regex
     t = normalizar(texto)
     if any(x in t for x in [
         "sim", "confirmo", "confirmar", "confirmado", "correto", "certo",
         "isso", "ok", "pode", "pode ser", "fechado", "combinado",
-        "perfeito", "exato", "exatamente", "isso mesmo", "show"
+        "perfeito", "exato", "exatamente", "isso mesmo", "show",
+        "beleza", "otimo", "ta bom", "valeu", "vai nessa", "marca ai"
     ]):
         return True
     if any(x in t for x in [
-        "nao", "não", "errado", "incorreto", "cancelar", "cancela",
-        "mudar", "outro", "diferente", "trocar",
-        "vou ver", "vou pensar", "deixa eu ver", "depois confirmo",
-        "confirmo depois", "confirmo amanha", "confirmo depois",
-        "te aviso", "aviso depois", "amanha", "depois te falo"
+        "nao", "não", "errado", "incorreto", "cancelar",
+        "mudar", "outro", "diferente", "trocar"
     ]):
         return False
     return None
