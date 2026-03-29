@@ -273,3 +273,118 @@ def _chamar_claude(prompt: str) -> dict | None:
     except Exception as e:
         logger.error(f"Erro ao chamar Claude API: {e}")
         return None
+
+# ─────────────────────────────────────────────
+# CONFIRMAÇÃO DE AGENDAMENTO
+# ─────────────────────────────────────────────
+
+def extrair_confirmacao(texto: str) -> bool | None:
+    """
+    Identifica se o lead confirmou ou recusou o agendamento.
+    Muito mais robusto que regex — entende qualquer variação informal.
+
+    Retorna: True=confirmou, False=recusou, None=não identificado
+    """
+    prompt = f"""O lead está confirmando ou recusando um agendamento de consulta.
+
+Mensagem do lead: "{texto}"
+
+Exemplos de CONFIRMAÇÃO: sim, confirmo, confirmado, correto, certo, ok, pode,
+pode ser, fechado, combinado, perfeito, exato, isso mesmo, show, beleza,
+tá bom, tá ótimo, vai nessa, pode marcar, marca aí, isso, perfeito, ótimo,
+quero esse, esse mesmo, esse horário, esse está ótimo.
+
+Exemplos de RECUSA: não, nao, errado, incorreto, cancelar, quero mudar,
+outro horário, não é esse, prefiro outro, muda, troca, diferente.
+
+Responda APENAS com JSON:
+{{"confirmado": true}} se confirmou
+{{"confirmado": false}} se recusou
+{{"confirmado": null}} se não foi possível identificar
+
+Nenhum texto além do JSON."""
+
+    resultado = _chamar_claude(prompt)
+    if resultado and resultado.get("confirmado") is not None:
+        return resultado["confirmado"]
+    return None
+
+
+# ─────────────────────────────────────────────
+# RESPOSTAS LIVRES (do claude_api.py original)
+# ─────────────────────────────────────────────
+
+SYSTEM_PROMPT = """Você é o assistente virtual do Consultório Nutricionista Victor Afonso.
+Seu nome é "Assistente do Nutri Victor".
+
+Personalidade:
+- Cordial, acolhedor e profissional
+- Usa emojis com moderação (🙏💚✅😊)
+- Escreve em português brasileiro
+- Respostas curtas e objetivas — máximo 3 parágrafos
+
+Sobre o consultório:
+- Nutricionista: Victor Afonso
+- Atendimento presencial: Max Fit (Méier) e Integra Saúde (Copacabana)
+- Atendimento online: Google Meet ou WhatsApp Vídeo
+- Valor da consulta: R$300,00
+- Pagamento presencial: cartão ou à vista
+- Pagamento online: Pix, transferência ou PagSeguro
+- Atende de quarta-feira a sábado
+
+REGRAS IMPORTANTES:
+- Nunca invente informações sobre o consultório
+- Se não souber responder, diga que o Nutri Victor irá ajudar em breve
+- Nunca confirme agendamentos — apenas colete preferências
+- Nunca forneça valores diferentes de R$300,00
+- Sempre direcione dúvidas complexas para o atendimento humano
+"""
+
+
+def processar_mensagem_livre(mensagem: str, contexto: str = "") -> str:
+    """
+    Usa Claude para responder perguntas abertas que não se encaixam
+    nos fluxos fixos — dúvidas sobre o consultório, perguntas gerais, etc.
+    """
+    try:
+        client = _get_client()
+        messages = []
+        if contexto:
+            messages.append({"role": "user", "content": contexto})
+            messages.append({"role": "assistant", "content": "Entendido."})
+        messages.append({"role": "user", "content": mensagem})
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=SYSTEM_PROMPT,
+            messages=messages
+        )
+        return response.content[0].text
+
+    except Exception as e:
+        logger.error(f"Erro ao processar mensagem livre: {e}")
+        return (
+            "Desculpe, tive um problema técnico. 😕\n\n"
+            "O *Nutri Victor* irá te responder em breve! 💚"
+        )
+
+
+def classificar_intencao(mensagem: str) -> str:
+    """
+    Classifica a intenção da mensagem.
+    Retorna: 'agendar', 'informacao', 'marinadas', 'saudacao' ou 'outro'
+    """
+    try:
+        client = _get_client()
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            system="Classifique a mensagem em UMA palavra: 'agendar', 'informacao', 'marinadas', 'saudacao' ou 'outro'. Responda APENAS a palavra.",
+            messages=[{"role": "user", "content": mensagem}]
+        )
+        return response.content[0].text.strip().lower()
+
+    except Exception as e:
+        logger.error(f"Erro ao classificar intenção: {e}")
+        return "outro"
