@@ -5,6 +5,11 @@ from bot import processar_mensagem
 from sheets import buscar_estado, criar_registro, atualizar_estado
 from config import ESTADO_ATENDIMENTO_HUMANO
 
+# Números que nunca recebem bot — Victor atende manualmente
+NUMEROS_SEM_BOT = {
+    "5521991640431",
+}
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s"
@@ -28,39 +33,43 @@ def webhook():
 
         logger.info(f"Webhook recebido: {data}")
 
-        # ── Ignora notificações de status (sem texto e sem phone) ──────────────
+        phone = data.get("phone", "").strip()
+
+        # ── Ignora notificações de status ──────────────────────────────────────
         if data.get("type") == "MessageStatusCallback":
             return jsonify({"status": "ignorado (status callback)"}), 200
 
+        # 🚫 Números VIP — bot não entra, Victor atende direto
+        if phone in NUMEROS_SEM_BOT:
+            logger.info(f"[BLOQUEIO] Número {phone} na lista sem bot — ignorando.")
+            return jsonify({"status": "ignored_vip_number"}), 200
+
         # ── Detecta se foi o Victor enviando do celular físico ─────────────────
-        # fromMe=True significa que o número conectado na Z-API enviou a mensagem
-        # Isso acontece quando Victor responde manualmente pelo celular
         from_me_raw = data.get("fromMe") or data.get("fromme") or data.get("from_me")
         from_me = str(from_me_raw).lower() in ("true", "1", "yes")
 
         if from_me:
-            phone_temp = data.get("phone", "").strip()
             nome_temp = (
                 data.get("senderName", "")
                 or data.get("chatName", "")
                 or "Paciente"
             )
-            if phone_temp:
+            if phone:
                 try:
-                    registro_temp = buscar_estado(phone_temp)
+                    registro_temp = buscar_estado(phone)
                     if registro_temp is None:
                         criar_registro(
-                            phone=phone_temp,
+                            phone=phone,
                             nome=nome_temp,
                             etapa=ESTADO_ATENDIMENTO_HUMANO
                         )
-                        logger.info(f"Registro criado em ATENDIMENTO_HUMANO para {phone_temp}")
+                        logger.info(f"Registro criado em ATENDIMENTO_HUMANO para {phone}")
                     else:
                         atualizar_estado(
                             registro_temp.get("row_number"),
                             etapa=ESTADO_ATENDIMENTO_HUMANO
                         )
-                        logger.info(f"Atualizado para ATENDIMENTO_HUMANO: {phone_temp}")
+                        logger.info(f"Atualizado para ATENDIMENTO_HUMANO: {phone}")
                 except Exception as e:
                     logger.error(f"Erro ao registrar ATENDIMENTO_HUMANO: {e}")
             return jsonify({"status": "ignorado (victor_enviou)"}), 200
@@ -77,7 +86,6 @@ def webhook():
             return jsonify({"status": f"ignorado (tipo={tipo})"}), 200
 
         # ── Extrai campos principais ───────────────────────────────────────────
-        phone = data.get("phone", "").strip()
         nome = (
             data.get("senderName", "")
             or data.get("chatName", "")
