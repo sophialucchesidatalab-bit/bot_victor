@@ -68,6 +68,8 @@ ENCERRAMENTO_BOT = """Entendido! Em breve o *Nutri Victor* entrará em contato p
 
 ERRO_OPCAO_INVALIDA = """Desculpa, não entendi sua resposta. 😅"""
 
+ENCAMINHAR_HUMANO = """Obrigada pelas informações, vou encaminhar para o atendimento humano! 😊"""
+
 # ── Mensagens contextuais de "não entendi" ────────────────────────────────────
 
 def erro_nao_entendi(etapa: str) -> str:
@@ -262,6 +264,18 @@ def notif_outro(nome: str, phone: str, descricao: str) -> str:
         f"📞 *Telefone:* {phone}\n"
         f"📝 *Mensagem:* {descricao}"
     )
+
+
+def notif_nao_entendeu(nome: str, phone: str, texto: str) -> str:
+    """Notifica Victor quando o bot não entendeu a mensagem do lead."""
+    return (
+        f"⚠️ *Bot não entendeu a mensagem*\n\n"
+        f"👤 *Nome:* {nome}\n"
+        f"📞 *Telefone:* {phone}\n"
+        f"💬 *Mensagem:* {texto}\n\n"
+        f"_Lead encaminhado para atendimento humano._"
+    )
+
 
 # Mensagem quando lead diz "depois confirmo"
 AGUARDA_CONFIRMACAO_DEPOIS = (
