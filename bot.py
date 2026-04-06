@@ -45,15 +45,20 @@ def normalizar(texto):
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
+def encaminhar_para_humano(phone, row, nome, texto):
+    """Quando o bot não entende — encaminha para atendimento humano e notifica Victor."""
+    atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
+    enviar_mensagem(phone, msg.ENCAMINHAR_HUMANO)
+    enviar_mensagem(VICTOR_PHONE, msg.notif_nao_entendeu(nome, phone, texto))
+
+
 def detectar_opcao_menu(t, texto_original=""):
-    # Tenta com Claude primeiro
     try:
         opcao = extrair_opcao_menu(texto_original or t)
         if opcao:
             return opcao
     except Exception:
         pass
-    # Fallback: regex
     if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
     if any(x in t for x in ["consul","acompanhamento","nutricional","nutri","retorno","agendar","agendamento","informacao","informacoes","primeira"]): return "1"
     if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
@@ -74,14 +79,12 @@ def detectar_opcao_submenu(t):
 
 
 def detectar_local(texto):
-    # Tenta com Claude primeiro
     try:
         local = extrair_local(texto)
         if local:
             return local
     except Exception:
         pass
-    # Fallback: regex
     t = normalizar(texto)
     if any(x in t for x in ["copa","copacabana","em copa"]):
         return "Copacabana"
@@ -93,14 +96,12 @@ def detectar_local(texto):
 
 
 def detectar_turno(texto):
-    # Tenta com Claude primeiro
     try:
         turno = extrair_turno(texto)
         if turno:
             return turno
     except Exception:
         pass
-    # Fallback: regex
     t = normalizar(texto)
     if any(x in t for x in ["manha", "de manha", "pela manha", "cedo", "matutino"]):
         return "Manhã"
@@ -112,14 +113,12 @@ def detectar_turno(texto):
 
 
 def detectar_confirmacao(texto):
-    # Tenta com Claude primeiro — entende qualquer variação informal
     try:
         resultado = extrair_confirmacao(texto)
         if resultado is not None:
             return resultado
     except Exception:
         pass
-    # Fallback: regex
     t = normalizar(texto)
     if any(x in t for x in [
         "sim", "confirmo", "confirmar", "confirmado", "correto", "certo",
@@ -147,7 +146,6 @@ def detectar_depois_confirmo(texto):
 
 
 def detectar_dia_bloqueado(texto):
-    """Retorna True se o lead mencionou um dia em que Victor não atende."""
     t = normalizar(texto)
     return any(x in t for x in ["segunda","seg","terca","ter","domingo","dom"])
 
@@ -199,11 +197,8 @@ def formatar_horarios_para_mensagem(slots, local_bot):
 
 
 def identificar_slot_escolhido(texto, slots):
-    # Remove formatação WhatsApp (*negrito*, _itálico_)
     import re as _re
     texto = _re.sub(r"[*_~]", "", texto).strip()
-
-    # Tenta com Claude primeiro
     try:
         slot = extrair_horario_escolhido(texto, slots)
         if slot == "PERGUNTA":
@@ -212,7 +207,6 @@ def identificar_slot_escolhido(texto, slots):
             return slot
     except Exception:
         pass
-    # Fallback: regex
     t = normalizar(texto)
     DIAS_NORM = {
         "quarta":"Qua","quinta":"Qui","sexta":"Sex",
@@ -250,19 +244,12 @@ def identificar_slot_escolhido(texto, slots):
 
 
 def responder_pergunta_horario(texto, slots, local_bot):
-    """
-    Quando o lead faz uma pergunta sobre horários (ex: "tem às 13h?", "tem sábado?"),
-    verifica na lista e responde de forma inteligente.
-    """
     import re
     t = normalizar(texto)
-
     DIAS_NORM = {
         "quarta": "Qua", "quinta": "Qui", "sexta": "Sex",
         "sabado": "Sáb", "segunda": "Seg", "terca": "Ter",
     }
-
-    # Extrai hora da pergunta
     hora_match = re.search(r"(\d{1,2})[\s]*[hH:][\s]*(\d{2})?", t)
     hora_str = None
     if hora_match:
@@ -270,14 +257,12 @@ def responder_pergunta_horario(texto, slots, local_bot):
         m = int(hora_match.group(2) or 0)
         hora_str = f"{h:02d}:{m:02d}"
 
-    # Extrai dia da pergunta
     dia_abrev = None
     for nome_dia, abrev in DIAS_NORM.items():
         if nome_dia in t:
             dia_abrev = abrev
             break
 
-    # Filtra slots que batem com a pergunta
     slots_encontrados = []
     for slot in slots:
         match_hora = hora_str and slot["hora_inicio"] == hora_str
@@ -303,13 +288,10 @@ def responder_pergunta_horario(texto, slots, local_bot):
             opcoes = "\n".join([f"• {s['dia']} ({s['data']}) às {s['hora_inicio']}" for s in slots_encontrados])
             return f"Sim! Tenho os seguintes horários disponíveis:\n\n{opcoes}\n\nQual prefere?"
     else:
-        # Não tem o horário pedido — verifica se perguntou sobre sábado
         if dia_abrev == "Sáb":
-            # Busca o sábado mais próximo em TODOS os slots disponíveis na planilha
             from sheets_agenda import buscar_todos_slots_sabado
             slots_sab = buscar_todos_slots_sabado(local_bot)
             if slots_sab:
-                # Pega o sábado mais próximo (primeiro da lista ordenada)
                 primeira_data_sab = slots_sab[0]["data"]
                 slots_prox_sab = [s for s in slots_sab if s["data"] == primeira_data_sab]
                 horarios = "; ".join([s["hora_inicio"] for s in slots_prox_sab])
@@ -321,7 +303,6 @@ def responder_pergunta_horario(texto, slots, local_bot):
                 mensagem_horarios = formatar_horarios_para_mensagem(slots, local_bot)
                 return f"Não tenho horários de sábado disponíveis no momento. 😕\n\n{mensagem_horarios}"
         else:
-            # Não tem o horário pedido — mostra os disponíveis
             mensagem_horarios = formatar_horarios_para_mensagem(slots, local_bot)
             return f"Infelizmente não tenho esse horário disponível. 😕\n\n{mensagem_horarios}"
 
@@ -367,7 +348,7 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
         else:
-            enviar_mensagem(phone, erro_nao_entendi(etapa))
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
 
     # ── SUBMENU ───────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_SUBMENU:
@@ -382,11 +363,10 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
         else:
-            enviar_mensagem(phone, erro_nao_entendi(etapa))
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
 
     # ── LOCAL ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_LOCAL:
-        # Se perguntou endereço antes de escolher local → mostra os dois
         if detectar_endereco(texto_norm):
             enviar_mensagem(phone, msg.ENDERECO_COPA)
             enviar_mensagem(phone, msg.ENDERECO_MEIER)
@@ -398,13 +378,13 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_detectado)
             enviar_mensagem(phone, msg.PERGUNTA_TURNO)
         else:
-            enviar_mensagem(phone, erro_nao_entendi(etapa))
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
 
     # ── TURNO ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_TURNO:
         turno = detectar_turno(texto)
         if not turno:
-            enviar_mensagem(phone, erro_nao_entendi(etapa))
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
 
         slots = buscar_horarios(local, turno)
@@ -423,12 +403,10 @@ def processar_mensagem(phone, nome, texto):
     elif etapa == ESTADO_AGUARDA_HORARIO:
         import json as _json
 
-        # Lead mencionou dia bloqueado
         if detectar_dia_bloqueado(texto):
             enviar_mensagem(phone, msg.ERRO_DIA_BLOQUEADO)
             return
 
-        # Lead quer decidir depois
         if detectar_depois_confirmo(texto):
             atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
             enviar_mensagem(phone, msg.AGUARDA_CONFIRMACAO_DEPOIS)
@@ -448,15 +426,12 @@ def processar_mensagem(phone, nome, texto):
         slot_escolhido = identificar_slot_escolhido(texto, slots)
 
         if slot_escolhido == "PERGUNTA":
-            # Lead fez uma pergunta (ex: "tem às 13h?", "tem sábado?")
-            # Verifica se o horário perguntado existe na lista
             resposta = responder_pergunta_horario(texto, slots, local)
             enviar_mensagem(phone, resposta)
             return
 
         if not slot_escolhido:
-            enviar_mensagem(phone, erro_nao_entendi(etapa))
-            enviar_mensagem(phone, formatar_horarios_para_mensagem(slots, local))
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
 
         atualizar_estado(
@@ -477,7 +452,7 @@ def processar_mensagem(phone, nome, texto):
         confirmado = detectar_confirmacao(texto)
 
         if confirmado is None:
-            enviar_mensagem(phone, erro_nao_entendi(etapa))
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
 
         try:
@@ -499,7 +474,6 @@ def processar_mensagem(phone, nome, texto):
             )
             atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
                              data=slot["data"], hora=slot["hora_inicio"])
-
             enviar_mensagem(phone, msg.confirmacao_final(
                 nome=nome_salvo, data=slot["data"], dia=slot["dia"],
                 hora=slot["hora_inicio"], endereco=msg.endereco_para_local(local),
@@ -518,12 +492,9 @@ def processar_mensagem(phone, nome, texto):
 
     # ── DESCRIÇÃO LIVRE ───────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_DESCRICAO:
-        # Claude responde a dúvida antes de passar para o Victor
         from claude_nlu import processar_mensagem_livre
         resposta_claude = processar_mensagem_livre(texto)
         enviar_mensagem(phone, resposta_claude)
-
-        # Notifica Victor e passa para atendimento humano
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
         enviar_mensagem(VICTOR_PHONE, msg.notif_outro(nome_salvo, phone, texto))
 
