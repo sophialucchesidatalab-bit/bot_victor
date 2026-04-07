@@ -1,3 +1,4 @@
+import json as _json
 import logging
 from datetime import datetime
 
@@ -22,6 +23,8 @@ from claude_nlu import (
     extrair_local_e_turno,
     extrair_local,
     extrair_turno,
+    extrair_multiplos_turnos,
+    extrair_dias_semana,
     extrair_horario_escolhido,
     extrair_confirmacao,
 )
@@ -30,6 +33,16 @@ from mensagens import erro_nao_entendi
 
 logger = logging.getLogger(__name__)
 
+# Nomes completos dos dias para uso nas mensagens
+NOMES_DIAS = {
+    "Seg": "Segunda-feira", "Ter": "Terça-feira", "Qua": "Quarta-feira",
+    "Qui": "Quinta-feira",  "Sex": "Sexta-feira",  "Sáb": "Sábado", "Dom": "Domingo",
+}
+
+
+# ─────────────────────────────────────────────
+# HELPERS GERAIS
+# ─────────────────────────────────────────────
 
 def normalizar_phone(phone):
     digits = "".join(c for c in str(phone) if c.isdigit())
@@ -51,6 +64,63 @@ def encaminhar_para_humano(phone, row, nome, texto):
     enviar_mensagem(phone, msg.ENCAMINHAR_HUMANO)
     enviar_mensagem(VICTOR_PHONE, msg.notif_nao_entendeu(nome, phone, texto))
 
+
+# ─────────────────────────────────────────────
+# AVISO DE DIA BLOQUEADO
+# ─────────────────────────────────────────────
+
+def _montar_aviso_dia_bloqueado(bloqueados: list[str], local: str) -> str:
+    """
+    Monta mensagem avisando que o(s) dia(s) informado(s) não têm atendimento,
+    e informa os dias disponíveis do local escolhido.
+    """
+    DIAS_POR_LOCAL = {
+        "Copacabana": "somente às *Sextas-feiras*",
+        "Méier":      "*Quarta, Quinta, Sexta e Sábado*",
+        "Online":     "*Quarta, Quinta, Sexta e Sábado*",
+    }
+    dias_bloq = ", ".join(NOMES_DIAS.get(d, d) for d in bloqueados)
+    dias_atend = DIAS_POR_LOCAL.get(local, "*Quarta a Sábado*")
+
+    return (
+        f"Infelizmente o Nutri Victor não atende às {dias_bloq}. 😕\n\n"
+        f"O atendimento em *{local}* acontece {dias_atend}.\n\n"
+        f"Você consegue em algum desses dias? 😊"
+    )
+
+
+def _verificar_dias_e_avisar(phone, texto, local) -> bool:
+    """
+    Verifica se a mensagem menciona dias bloqueados.
+
+    Regras:
+    - Só dias bloqueados → envia aviso e retorna True (interrompe o fluxo)
+    - Mix de válidos + bloqueados → ignora bloqueados silenciosamente, retorna False
+    - Sem dias mencionados → retorna False
+
+    Retorna True se o fluxo deve ser interrompido (aviso enviado).
+    """
+    try:
+        dias = extrair_dias_semana(texto)
+    except Exception:
+        return False
+
+    bloqueados = dias.get("bloqueados", [])
+    validos    = dias.get("validos", [])
+
+    # Só bloqueados, sem nenhum válido → avisa
+    if bloqueados and not validos:
+        aviso = _montar_aviso_dia_bloqueado(bloqueados, local or "nosso consultório")
+        enviar_mensagem(phone, aviso)
+        return True
+
+    # Mix ou sem dias → segue normalmente
+    return False
+
+
+# ─────────────────────────────────────────────
+# DETECÇÃO DE INTENÇÕES
+# ─────────────────────────────────────────────
 
 def detectar_opcao_menu(t, texto_original=""):
     try:
@@ -112,6 +182,28 @@ def detectar_turno(texto):
     return None
 
 
+def detectar_turnos(texto: str) -> list[str]:
+    """Retorna LISTA de turnos mencionados (suporta múltiplos)."""
+    try:
+        turnos = extrair_multiplos_turnos(texto)
+        if turnos:
+            return turnos
+    except Exception:
+        pass
+
+    t = normalizar(texto)
+    turnos = []
+    if any(x in t for x in ["manha", "cedo", "matutino"]):
+        turnos.append("Manhã")
+    if any(x in t for x in ["tarde", "almoco"]):
+        turnos.append("Tarde")
+    if any(x in t for x in ["noite", "18h"]):
+        turnos.append("Noite")
+    if any(x in t for x in ["qualquer", "tanto faz"]):
+        return ["Manhã", "Tarde", "Noite"]
+    return turnos
+
+
 def detectar_confirmacao(texto):
     try:
         resultado = extrair_confirmacao(texto)
@@ -158,6 +250,32 @@ def detectar_endereco(texto):
     ])
 
 
+# ─────────────────────────────────────────────
+# HELPERS DE SLOTS
+# ─────────────────────────────────────────────
+
+def buscar_slots_por_turnos(local: str, turnos: list[str]) -> list[dict]:
+    """Busca slots de múltiplos turnos, mescla sem duplicatas e ordena cronologicamente."""
+    todos_slots = []
+    slots_vistos = set()
+    for turno in turnos:
+        for slot in buscar_horarios(local, turno):
+            chave = (slot["data"], slot["hora_inicio"])
+            if chave not in slots_vistos:
+                slots_vistos.add(chave)
+                todos_slots.append(slot)
+
+    def sort_slot(s):
+        try:
+            d, m, a = s["data"].split("/")
+            return (int(a), int(m), int(d), s["hora_inicio"])
+        except Exception:
+            return (9999, 99, 99, s["hora_inicio"])
+
+    todos_slots.sort(key=sort_slot)
+    return todos_slots
+
+
 def formatar_horarios_para_mensagem(slots, local_bot):
     if not slots:
         return None
@@ -195,6 +313,47 @@ def formatar_horarios_para_mensagem(slots, local_bot):
         f"_(considere sempre o horário de início)_"
     )
 
+
+def _recuperar_turnos_pre(registro: dict) -> list[str]:
+    """Lê o buffer de turnos pré-extraídos do campo 'hora'."""
+    hora_raw = registro.get("hora", "")
+    if not hora_raw:
+        return []
+    try:
+        parsed = _json.loads(hora_raw)
+        if isinstance(parsed, dict) and "_turnos_pre" in parsed:
+            return parsed["_turnos_pre"] or []
+    except Exception:
+        pass
+    return []
+
+
+def _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre):
+    """
+    Após definir tipo de consulta, envia slots (se há turnos salvos) ou pergunta turno.
+    Limpa o buffer de turnos antes de agir.
+    """
+    atualizar_estado(row, hora="")
+
+    if turnos_pre:
+        slots = buscar_slots_por_turnos(local, turnos_pre)
+        if slots:
+            atualizar_estado(row, etapa=ESTADO_AGUARDA_HORARIO,
+                             hora=_json.dumps(slots, ensure_ascii=False))
+            enviar_mensagem(phone, formatar_horarios_para_mensagem(slots, local))
+        else:
+            turno_label = " / ".join(turnos_pre)
+            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO, hora=turno_label)
+            enviar_mensagem(phone, msg.SEM_HORARIOS_DISPONIVEIS)
+            enviar_mensagem(VICTOR_PHONE, msg.notif_triagem(nome_salvo, phone, local, turno_label))
+    else:
+        atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO)
+        enviar_mensagem(phone, msg.PERGUNTA_TURNO)
+
+
+# ─────────────────────────────────────────────
+# HELPERS DE HORÁRIO
+# ─────────────────────────────────────────────
 
 def identificar_slot_escolhido(texto, slots):
     import re as _re
@@ -307,6 +466,10 @@ def responder_pergunta_horario(texto, slots, local_bot):
             return f"Infelizmente não tenho esse horário disponível. 😕\n\n{mensagem_horarios}"
 
 
+# ─────────────────────────────────────────────
+# PROCESSAMENTO PRINCIPAL
+# ─────────────────────────────────────────────
+
 def processar_mensagem(phone, nome, texto):
     phone = normalizar_phone(phone)
     texto_norm = normalizar(texto)
@@ -314,9 +477,57 @@ def processar_mensagem(phone, nome, texto):
 
     registro = buscar_estado(phone)
 
+    # ── NOVO CONTATO ──────────────────────────────────────────────────────────
     if registro is None:
-        criar_registro(phone=phone, nome=nome, etapa=ESTADO_AGUARDA_OPCAO)
-        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+        # Tenta extrair local e turnos da primeira mensagem
+        local_extraido = None
+        turnos_extraidos = []
+        try:
+            resultado_nlu = extrair_local_e_turno(texto)
+            local_extraido = resultado_nlu.get("local")
+        except Exception:
+            pass
+
+        if local_extraido:
+            # Verifica dias bloqueados na primeira mensagem
+            # Se mencionar só dias bloqueados → avisa imediatamente, sem criar registro ainda
+            try:
+                dias = extrair_dias_semana(texto)
+                bloqueados = dias.get("bloqueados", [])
+                validos    = dias.get("validos", [])
+                if bloqueados and not validos:
+                    aviso = _montar_aviso_dia_bloqueado(bloqueados, local_extraido)
+                    # Cria registro em AGUARDA_SUBMENU mesmo assim para manter contexto
+                    criar_registro(
+                        phone=phone,
+                        nome=nome,
+                        etapa=ESTADO_AGUARDA_SUBMENU,
+                        local=local_extraido,
+                        hora="",
+                    )
+                    enviar_mensagem(phone, aviso)
+                    return
+            except Exception:
+                pass
+
+            try:
+                turnos_extraidos = detectar_turnos(texto)
+            except Exception:
+                turnos_extraidos = []
+
+        hora_buffer = (
+            _json.dumps({"_turnos_pre": turnos_extraidos}, ensure_ascii=False)
+            if turnos_extraidos else ""
+        )
+
+        criar_registro(
+            phone=phone,
+            nome=nome,
+            etapa=ESTADO_AGUARDA_SUBMENU,
+            local=local_extraido or "",
+            hora=hora_buffer,
+        )
+        enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
         return
 
     etapa      = registro.get("etapa", ESTADO_AGUARDA_OPCAO)
@@ -324,7 +535,7 @@ def processar_mensagem(phone, nome, texto):
     row        = registro.get("row_number")
     nome_salvo = registro.get("nome", nome) or nome
 
-    logger.info(f"[{phone}] etapa={etapa}")
+    logger.info(f"[{phone}] etapa={etapa} local={local}")
 
     # Atalho: endereço
     if detectar_endereco(texto_norm) and local:
@@ -353,17 +564,32 @@ def processar_mensagem(phone, nome, texto):
     # ── SUBMENU ───────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_SUBMENU:
         opcao = detectar_opcao_submenu(texto_norm)
-        if opcao == "1":
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
-            enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
-        elif opcao == "2":
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
-            enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
-        elif opcao == "3":
+
+        if opcao == "3":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
-        else:
+            return
+
+        if opcao not in ("1", "2"):
             encaminhar_para_humano(phone, row, nome_salvo, texto)
+            return
+
+        turnos_pre = _recuperar_turnos_pre(registro)
+
+        if opcao == "1":
+            if local:
+                enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
+                _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre)
+            else:
+                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
+                enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
+
+        elif opcao == "2":
+            if local:
+                _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre)
+            else:
+                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
+                enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
 
     # ── LOCAL ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_LOCAL:
@@ -382,27 +608,32 @@ def processar_mensagem(phone, nome, texto):
 
     # ── TURNO ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_TURNO:
-        turno = detectar_turno(texto)
-        if not turno:
+        # Verifica dias bloqueados antes de processar turnos
+        # Se mencionar só dias bloqueados → avisa e aguarda nova resposta no mesmo estado
+        if _verificar_dias_e_avisar(phone, texto, local):
+            return
+
+        turnos_detectados = detectar_turnos(texto)
+
+        if not turnos_detectados:
             encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
 
-        slots = buscar_horarios(local, turno)
+        slots = buscar_slots_por_turnos(local, turnos_detectados)
 
         if not slots:
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO, hora=turno)
+            turno_label = " / ".join(turnos_detectados)
+            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO, hora=turno_label)
             enviar_mensagem(phone, msg.SEM_HORARIOS_DISPONIVEIS)
-            enviar_mensagem(VICTOR_PHONE, msg.notif_triagem(nome_salvo, phone, local, turno))
+            enviar_mensagem(VICTOR_PHONE, msg.notif_triagem(nome_salvo, phone, local, turno_label))
             return
 
-        import json as _json
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_HORARIO, hora=_json.dumps(slots, ensure_ascii=False))
+        atualizar_estado(row, etapa=ESTADO_AGUARDA_HORARIO,
+                         hora=_json.dumps(slots, ensure_ascii=False))
         enviar_mensagem(phone, formatar_horarios_para_mensagem(slots, local))
 
     # ── ESCOLHA DO HORÁRIO ────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_HORARIO:
-        import json as _json
-
         if detectar_dia_bloqueado(texto):
             enviar_mensagem(phone, msg.ERRO_DIA_BLOQUEADO)
             return
@@ -415,6 +646,8 @@ def processar_mensagem(phone, nome, texto):
 
         try:
             slots = _json.loads(registro.get("hora", "[]"))
+            if isinstance(slots, dict):
+                slots = []
         except Exception:
             slots = []
 
@@ -448,7 +681,6 @@ def processar_mensagem(phone, nome, texto):
 
     # ── CONFIRMAÇÃO ───────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_CONFIRMACAO:
-        import json as _json
         confirmado = detectar_confirmacao(texto)
 
         if confirmado is None:
@@ -457,6 +689,8 @@ def processar_mensagem(phone, nome, texto):
 
         try:
             slot = _json.loads(registro.get("hora", "{}"))
+            if isinstance(slot, list):
+                slot = {}
         except Exception:
             slot = {}
 
