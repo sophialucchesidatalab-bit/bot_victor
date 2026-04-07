@@ -59,9 +59,12 @@ def buscar_estado(phone: str) -> dict | None:
         return None
 
 
-def criar_registro(phone: str, nome: str, etapa: str) -> bool:
+def criar_registro(phone: str, nome: str, etapa: str,
+                   local: str = "", hora: str = "") -> bool:
     """
     Cria novo registro para um paciente novo.
+    Aceita local e hora opcionais para pré-preencher quando extraídos
+    da primeira mensagem do paciente.
     USA UPDATE em linha exata em vez de APPEND para evitar
     deslocamento de colunas causado por dados em colunas além de G.
     """
@@ -72,7 +75,8 @@ def criar_registro(phone: str, nome: str, etapa: str) -> bool:
 
         linha = _proxima_linha_vazia(service)
 
-        values = [[phone, etapa, "", "", "", nome, agora]]
+        # Colunas: A=phone, B=etapa, C=local, D=data, E=hora, F=nome, G=atualizado
+        values = [[phone, etapa, local, "", hora, nome, agora]]
 
         service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
@@ -81,7 +85,7 @@ def criar_registro(phone: str, nome: str, etapa: str) -> bool:
             body={"values": values}
         ).execute()
 
-        logger.info(f"Registro criado para {phone} na linha {linha}")
+        logger.info(f"Registro criado para {phone} na linha {linha} (local={local})")
         return True
     except Exception as e:
         logger.error(f"Erro ao criar registro para {phone}: {e}")
