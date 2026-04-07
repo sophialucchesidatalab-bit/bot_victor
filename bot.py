@@ -71,20 +71,14 @@ def encaminhar_para_humano(phone, row, nome, texto):
 
 def _montar_aviso_dia_bloqueado(bloqueados: list[str], local: str) -> str:
     """
-    Monta mensagem avisando que o(s) dia(s) informado(s) não têm atendimento,
-    e informa os dias disponíveis do local escolhido.
+    Monta mensagem avisando que o(s) dia(s) informado(s) não têm atendimento.
+    Todos os locais atendem de Quarta a Sábado.
     """
-    DIAS_POR_LOCAL = {
-        "Copacabana": "somente às *Sextas-feiras*",
-        "Méier":      "*Quarta, Quinta, Sexta e Sábado*",
-        "Online":     "*Quarta, Quinta, Sexta e Sábado*",
-    }
     dias_bloq = ", ".join(NOMES_DIAS.get(d, d) for d in bloqueados)
-    dias_atend = DIAS_POR_LOCAL.get(local, "*Quarta a Sábado*")
 
     return (
         f"Infelizmente o Nutri Victor não atende às {dias_bloq}. 😕\n\n"
-        f"O atendimento em *{local}* acontece {dias_atend}.\n\n"
+        f"O atendimento acontece de *Quarta a Sábado*.\n\n"
         f"Você consegue em algum desses dias? 😊"
     )
 
