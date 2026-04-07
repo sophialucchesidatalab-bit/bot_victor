@@ -30,16 +30,17 @@ Os atendimentos acontecem de quarta-feira a sábado.
 Turnos disponíveis: Manhã (até 11h59), Tarde (12h-17h59), Noite (18h em diante).
 """
 
+# Dias em que Victor ATENDE
+DIAS_VALIDOS    = {"Qua", "Qui", "Sex", "Sáb"}
+# Dias em que Victor NÃO atende
+DIAS_BLOQUEADOS = {"Seg", "Ter", "Dom"}
+
 
 # ─────────────────────────────────────────────
 # EXTRAÇÃO DE INTENÇÃO DO MENU PRINCIPAL
 # ─────────────────────────────────────────────
 
 def extrair_opcao_menu(texto: str) -> str | None:
-    """
-    Identifica qual opção do menu o lead escolheu.
-    Retorna: "1" (consulta), "2" (marinadas), "3" (outro) ou None.
-    """
     prompt = f"""{CONTEXTO_VICTOR}
 
 O lead enviou a seguinte mensagem para o menu principal:
@@ -71,14 +72,6 @@ Nenhum texto além do JSON."""
 def extrair_local_e_turno(texto: str) -> dict:
     """
     Extrai local e turno de uma mensagem em linguagem natural.
-
-    Exemplos que deve entender:
-    - "quero sexta à tarde no méier" → local=Méier, turno=Tarde
-    - "prefiro de manhã em copa" → local=Copacabana, turno=Manhã
-    - "online à noite" → local=Online, turno=Noite
-    - "méier" → local=Méier, turno=None (só local)
-    - "tarde" → local=None, turno=Tarde (só turno)
-
     Retorna dict com chaves: local, turno (cada um pode ser None)
     """
     prompt = f"""{CONTEXTO_VICTOR}
@@ -120,10 +113,6 @@ Nenhum texto além do JSON."""
 # ─────────────────────────────────────────────
 
 def extrair_local(texto: str) -> str | None:
-    """
-    Extrai apenas o local de uma mensagem.
-    Retorna: "Méier", "Copacabana", "Online" ou None.
-    """
     resultado = extrair_local_e_turno(texto)
     return resultado.get("local")
 
@@ -133,12 +122,158 @@ def extrair_local(texto: str) -> str | None:
 # ─────────────────────────────────────────────
 
 def extrair_turno(texto: str) -> str | None:
-    """
-    Extrai apenas o turno de uma mensagem.
-    Retorna: "Manhã", "Tarde", "Noite" ou None.
-    """
+    """Extrai apenas o PRIMEIRO turno mencionado."""
     resultado = extrair_local_e_turno(texto)
     return resultado.get("turno")
+
+
+# ─────────────────────────────────────────────
+# EXTRAÇÃO DE MÚLTIPLOS TURNOS
+# ─────────────────────────────────────────────
+
+def extrair_multiplos_turnos(texto: str) -> list[str]:
+    """
+    Extrai TODOS os turnos mencionados pelo lead.
+    Ex: "De preferência manhã ou à noite" → ["Manhã", "Noite"]
+    Retorna lista ordenada (Manhã → Tarde → Noite).
+    """
+    prompt = f"""{CONTEXTO_VICTOR}
+
+O lead enviou a seguinte mensagem sobre preferência de horário:
+"{texto}"
+
+Identifique TODOS os turnos mencionados ou implícitos.
+
+Turnos válidos: "Manhã", "Tarde", "Noite"
+- Manhã = manhã, manha, de manhã, cedo, matutino, antes do meio-dia, de manhãzinha, pela manhã
+- Tarde = tarde, de tarde, pela tarde, após o almoço, depois do almoço
+- Noite = noite, de noite, pela noite, à noite, a noite, após as 18h, depois das 18h
+
+Casos especiais:
+- "qualquer horário" / "qualquer" / "tanto faz" / "não tenho preferência" → todos os três turnos
+- "manhã ou noite" → ["Manhã", "Noite"]
+- "tarde e noite" → ["Tarde", "Noite"]
+
+Responda APENAS com JSON:
+{{"turnos": ["Manhã", "Noite"]}}
+
+Se nenhum turno identificado:
+{{"turnos": []}}
+
+Nenhum texto além do JSON."""
+
+    resultado = _chamar_claude(prompt)
+    if resultado and isinstance(resultado.get("turnos"), list):
+        ORDEM = {"Manhã": 0, "Tarde": 1, "Noite": 2}
+        turnos = [t for t in resultado["turnos"] if t in ORDEM]
+        return sorted(turnos, key=lambda t: ORDEM[t])
+
+    # Fallback regex
+    import unicodedata
+    def norm(s):
+        s = s.lower()
+        s = unicodedata.normalize("NFD", s)
+        return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+    t = norm(texto)
+    turnos = []
+    if any(x in t for x in ["manha", "cedo", "matutino"]):
+        turnos.append("Manhã")
+    if any(x in t for x in ["tarde", "almoco"]):
+        turnos.append("Tarde")
+    if any(x in t for x in ["noite", "18h", "depois das 18"]):
+        turnos.append("Noite")
+    if any(x in t for x in ["qualquer", "tanto faz", "nao tenho preferencia"]):
+        return ["Manhã", "Tarde", "Noite"]
+    return turnos
+
+
+# ─────────────────────────────────────────────
+# EXTRAÇÃO DE DIAS DA SEMANA  ← NOVO
+# ─────────────────────────────────────────────
+
+def extrair_dias_semana(texto: str) -> dict:
+    """
+    Extrai todos os dias da semana mencionados e classifica em válidos/bloqueados.
+
+    Retorna:
+    {
+        "validos":    ["Qui", "Sex"],  # dias que Victor atende (Qua-Sáb)
+        "bloqueados": ["Ter"],         # dias que Victor NÃO atende (Seg/Ter/Dom)
+        "todos":      ["Ter", "Qui", "Sex"]
+    }
+    Lista vazia = nenhum dia daquele tipo foi mencionado.
+    """
+    prompt = f"""{CONTEXTO_VICTOR}
+
+O lead enviou a seguinte mensagem:
+"{texto}"
+
+Identifique TODOS os dias da semana mencionados explícita ou implicitamente.
+
+Abreviações a usar na resposta:
+Segunda-feira = Seg | Terça-feira = Ter | Quarta-feira = Qua
+Quinta-feira  = Qui | Sexta-feira = Sex | Sábado = Sáb | Domingo = Dom
+
+Dias que o Nutri Victor ATENDE: Qua, Qui, Sex, Sáb
+Dias que o Nutri Victor NÃO atende: Seg, Ter, Dom
+
+Exemplos:
+- "quero marcar na terça ou na quinta" → validos=["Qui"], bloqueados=["Ter"]
+- "só terça" → validos=[], bloqueados=["Ter"]
+- "sexta ou sábado" → validos=["Sex","Sáb"], bloqueados=[]
+- "de quarta em diante" → validos=["Qua","Qui","Sex","Sáb"], bloqueados=[]
+- "de quinta em diante" → validos=["Qui","Sex","Sáb"], bloqueados=[]
+- "qualquer dia" → validos=["Qua","Qui","Sex","Sáb"], bloqueados=[]
+- "segunda a sexta" → validos=["Qua","Qui","Sex"], bloqueados=["Seg","Ter"]
+- mensagem sem nenhum dia → validos=[], bloqueados=[]
+
+Responda APENAS com JSON:
+{{"validos": ["Qui"], "bloqueados": ["Ter"]}}
+
+Nenhum texto além do JSON."""
+
+    resultado = _chamar_claude(prompt)
+
+    ORDEM = {"Seg": 0, "Ter": 1, "Qua": 2, "Qui": 3, "Sex": 4, "Sáb": 5, "Dom": 6}
+
+    if resultado and isinstance(resultado.get("validos"), list):
+        validos    = [d for d in resultado.get("validos", [])    if d in ORDEM]
+        bloqueados = [d for d in resultado.get("bloqueados", []) if d in ORDEM]
+        validos    = sorted(validos,    key=lambda d: ORDEM[d])
+        bloqueados = sorted(bloqueados, key=lambda d: ORDEM[d])
+        todos      = sorted(validos + bloqueados, key=lambda d: ORDEM[d])
+        return {"validos": validos, "bloqueados": bloqueados, "todos": todos}
+
+    # Fallback regex
+    import unicodedata, re
+    def norm(s):
+        s = s.lower()
+        s = unicodedata.normalize("NFD", s)
+        return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+    t = norm(texto)
+    encontrados = set()
+
+    MAPA = {
+        "segunda": "Seg", "terca": "Ter", "quarta": "Qua",
+        "quinta":  "Qui", "sexta": "Sex", "sabado": "Sáb", "domingo": "Dom",
+    }
+    for palavra, abrev in MAPA.items():
+        if re.search(rf"\b{palavra}\b", t):
+            encontrados.add(abrev)
+
+    if re.search(r"quarta\s*(em\s*diante|para\s*frente|adiante)", t):
+        encontrados.update(["Qua", "Qui", "Sex", "Sáb"])
+    if re.search(r"quinta\s*(em\s*diante|para\s*frente|adiante)", t):
+        encontrados.update(["Qui", "Sex", "Sáb"])
+    if re.search(r"qualquer\s*dia|tanto\s*faz", t):
+        encontrados.update(["Qua", "Qui", "Sex", "Sáb"])
+
+    validos    = sorted([d for d in encontrados if d in DIAS_VALIDOS],    key=lambda d: ORDEM[d])
+    bloqueados = sorted([d for d in encontrados if d in DIAS_BLOQUEADOS], key=lambda d: ORDEM[d])
+    todos      = sorted(list(encontrados), key=lambda d: ORDEM[d])
+    return {"validos": validos, "bloqueados": bloqueados, "todos": todos}
 
 
 # ─────────────────────────────────────────────
@@ -148,21 +283,14 @@ def extrair_turno(texto: str) -> str | None:
 def extrair_horario_escolhido(texto: str, slots_disponiveis: list[dict]) -> dict | None:
     """
     Identifica qual slot o lead escolheu dentre os disponíveis.
-
-    Parâmetros:
-        texto: mensagem do lead (ex: "sexta às 9", "quarta 14:30", "dia 4 de manhã")
-        slots_disponiveis: lista de dicts com data, dia, hora_inicio
-
-    Retorna o dict do slot escolhido, "PERGUNTA" se for uma pergunta, ou None.
+    Retorna o dict do slot, "PERGUNTA" se for pergunta, ou None.
     """
     if not slots_disponiveis:
         return None
 
-    # Remove formatação do WhatsApp (*negrito*, _itálico_) antes de processar
     import re as _re
     texto = _re.sub(r"[*_~]", "", texto).strip()
 
-    # Formata lista de slots para o prompt
     lista_slots = "\n".join([
         f"- {s['dia']} {s['data']} às {s['hora_inicio']}"
         for s in slots_disponiveis
@@ -178,30 +306,22 @@ Os horários disponíveis são:
 
 TAREFA: Identifique qual horário o lead quer agendar.
 
-Exemplos de como o lead pode escrever:
-- "sexta as 9h" ou "sexta, as 9h" ou "sexta 9" → dia=Sex, hora=09:00
-- "quarta 10:30" ou "quarta às 10h30" → dia=Qua, hora=10:30
-- "03/04 às 9:00" ou "dia 3 de abril 9h" → data=03/04/2026, hora=09:00
+Exemplos:
+- "sexta as 9h" ou "sexta 9" → dia=Sex, hora=09:00
+- "quarta às 10h30" → dia=Qua, hora=10:30
+- "03/04 às 9:00" → data=03/04/2026, hora=09:00
 - "9h" sozinho → procura 09:00 na lista
-- "10 horas" ou "dez horas" → hora=10:00
-- "9h30" ou "9:30" → hora=09:30
 
-CONVERSÕES IMPORTANTES:
-- "9h" = "09:00"
-- "9h30" = "09:30"  
-- "10h" = "10:00"
-- "11h30" = "11:30"
+CONVERSÕES: "9h"=09:00 | "9h30"=09:30 | "10h"=10:00 | "11h30"=11:30
 
-PERGUNTAS ABERTAS — se o lead perguntou algo em vez de escolher, retorne null:
-- "tem às 13h?" → está perguntando, não escolhendo → slot=null
-- "tem sábado?" → está perguntando → slot=null
-- "qual o primeiro horário?" → está perguntando → slot=null
+PERGUNTAS (retorne null):
+- "tem às 13h?" / "tem sábado?" / "qual o primeiro horário?"
 
-Se há dois dias iguais disponíveis (ex: duas sextas) e o lead não especificou a data, escolha a mais próxima (menor data).
+Se há dois dias iguais, escolha a data mais próxima.
 
 Responda APENAS com JSON:
 Se identificou: {{"dia": "Sex", "data": "03/04/2026", "hora_inicio": "09:00"}}
-Se pergunta ou não identificou: {{"slot": null, "pergunta": true}}
+Se pergunta: {{"slot": null, "pergunta": true}}
 
 Nenhum texto além do JSON."""
 
@@ -209,12 +329,10 @@ Nenhum texto além do JSON."""
     if not resultado:
         return None
 
-    # Lead fez uma pergunta em vez de escolher
     if resultado.get("pergunta") or resultado.get("slot") is None:
         if resultado.get("hora_inicio") is None and resultado.get("data") is None:
             return "PERGUNTA"
 
-    # Casa com o slot real da lista
     hora_extraida = resultado.get("hora_inicio")
     data_extraida = resultado.get("data")
     dia_extraido  = resultado.get("dia")
@@ -222,7 +340,6 @@ Nenhum texto além do JSON."""
     if not hora_extraida:
         return None
 
-    # Normaliza hora para comparação: "9:00" → "09:00"
     def norm_hora(h):
         if not h:
             return h
@@ -238,7 +355,6 @@ Nenhum texto além do JSON."""
         if dia_extraido and slot["dia"] == dia_extraido and slot_hora_norm == hora_norm:
             return slot
 
-    # Encontrou hora mas não casou com nenhum slot disponível
     return None
 
 
@@ -247,20 +363,15 @@ Nenhum texto além do JSON."""
 # ─────────────────────────────────────────────
 
 def _chamar_claude(prompt: str) -> dict | None:
-    """
-    Chama a Claude API e retorna o JSON parseado.
-    Em caso de erro, retorna None para o bot cair no fallback de regex.
-    """
     try:
         client = _get_client()
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",  # modelo mais rápido e barato
+            model="claude-haiku-4-5-20251001",
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}]
         )
         texto = response.content[0].text.strip()
 
-        # Remove possíveis blocos de código markdown
         if texto.startswith("```"):
             linhas = texto.split("\n")
             texto = "\n".join(linhas[1:-1])
@@ -274,17 +385,12 @@ def _chamar_claude(prompt: str) -> dict | None:
         logger.error(f"Erro ao chamar Claude API: {e}")
         return None
 
+
 # ─────────────────────────────────────────────
 # CONFIRMAÇÃO DE AGENDAMENTO
 # ─────────────────────────────────────────────
 
 def extrair_confirmacao(texto: str) -> bool | None:
-    """
-    Identifica se o lead confirmou ou recusou o agendamento.
-    Muito mais robusto que regex — entende qualquer variação informal.
-
-    Retorna: True=confirmou, False=recusou, None=não identificado
-    """
     prompt = f"""O lead está confirmando ou recusando um agendamento de consulta.
 
 Mensagem do lead: "{texto}"
@@ -311,7 +417,7 @@ Nenhum texto além do JSON."""
 
 
 # ─────────────────────────────────────────────
-# RESPOSTAS LIVRES (do claude_api.py original)
+# RESPOSTAS LIVRES
 # ─────────────────────────────────────────────
 
 SYSTEM_PROMPT = """Você é o assistente virtual do Consultório Nutricionista Victor Afonso.
@@ -342,10 +448,6 @@ REGRAS IMPORTANTES:
 
 
 def processar_mensagem_livre(mensagem: str, contexto: str = "") -> str:
-    """
-    Usa Claude para responder perguntas abertas que não se encaixam
-    nos fluxos fixos — dúvidas sobre o consultório, perguntas gerais, etc.
-    """
     try:
         client = _get_client()
         messages = []
@@ -371,10 +473,6 @@ def processar_mensagem_livre(mensagem: str, contexto: str = "") -> str:
 
 
 def classificar_intencao(mensagem: str) -> str:
-    """
-    Classifica a intenção da mensagem.
-    Retorna: 'agendar', 'informacao', 'marinadas', 'saudacao' ou 'outro'
-    """
     try:
         client = _get_client()
         response = client.messages.create(
