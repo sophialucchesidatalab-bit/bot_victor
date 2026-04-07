@@ -491,14 +491,23 @@ def processar_mensagem(phone, nome, texto):
                 validos    = dias.get("validos", [])
                 if bloqueados and not validos:
                     aviso = _montar_aviso_dia_bloqueado(bloqueados, local_extraido)
-                    # Cria registro em AGUARDA_SUBMENU mesmo assim para manter contexto
-                    criar_registro(
+                    sucesso = criar_registro(
                         phone=phone,
                         nome=nome,
                         etapa=ESTADO_AGUARDA_SUBMENU,
                         local=local_extraido,
                         hora="",
                     )
+                    if not sucesso:
+                        logger.error(f"[{phone}] Falha ao criar registro — notificando Victor")
+                        enviar_mensagem(
+                            VICTOR_PHONE,
+                            f"⚠️ *Erro ao registrar novo contato!*\n\n"
+                            f"👤 *Nome:* {nome}\n"
+                            f"📞 *Telefone:* {phone}\n\n"
+                            f"_Falha ao gravar na planilha. Verificar manualmente._"
+                        )
+                        return
                     enviar_mensagem(phone, aviso)
                     return
             except Exception:
@@ -514,13 +523,23 @@ def processar_mensagem(phone, nome, texto):
             if turnos_extraidos else ""
         )
 
-        criar_registro(
+        sucesso = criar_registro(
             phone=phone,
             nome=nome,
             etapa=ESTADO_AGUARDA_SUBMENU,
             local=local_extraido or "",
             hora=hora_buffer,
         )
+        if not sucesso:
+            logger.error(f"[{phone}] Falha ao criar registro — notificando Victor")
+            enviar_mensagem(
+                VICTOR_PHONE,
+                f"⚠️ *Erro ao registrar novo contato!*\n\n"
+                f"👤 *Nome:* {nome}\n"
+                f"📞 *Telefone:* {phone}\n\n"
+                f"_Falha ao gravar na planilha. Verificar manualmente._"
+            )
+            return
         enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
         return
 
