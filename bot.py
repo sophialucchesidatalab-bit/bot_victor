@@ -323,7 +323,7 @@ def detectar_confirmacao(texto):
         "sim", "confirmo", "confirmar", "confirmado", "correto", "certo",
         "isso", "ok", "pode", "pode ser", "fechado", "combinado",
         "perfeito", "exato", "exatamente", "isso mesmo", "show",
-        "beleza", "otimo", "ta bom", "valeu", "vai nessa", "marca ai"
+        "beleza", "otimo", "ta bom", "valeu", "vai nessa", "marca ai", "podemos", "vamos"
     ]):
         return True
     if any(x in t for x in [
@@ -812,9 +812,16 @@ def processar_mensagem(phone, nome, texto):
     if (etapa not in _ESTADOS_SEM_INTERCEPTACAO_VALOR
             and detectar_pergunta_valor(texto)):
 
+        # Se estiver em AGUARDA_SUBMENU, tenta extrair opcao do submenu da mesma mensagem
+        # Ex: "retorno. quanto custa mesmo?" → opcao_submenu = "2"
+        opcao_submenu_salva = None
+        if etapa == ESTADO_AGUARDA_SUBMENU:
+            opcao_submenu_salva = detectar_opcao_submenu(texto_norm)
+
         buffer_valor = _json.dumps({
             "_etapa_anterior": etapa,
             "_local_anterior": local,
+            "_opcao_submenu": opcao_submenu_salva,
         }, ensure_ascii=False)
         atualizar_estado(row, etapa=ESTADO_AGUARDA_CONFIRMACAO_VALOR, hora=buffer_valor)
 
@@ -1044,17 +1051,28 @@ def processar_mensagem(phone, nome, texto):
             local_anterior = local
 
         if confirmado is True:
-            # Restaura estado anterior e manda mensagem correta
-            atualizar_estado(row, etapa=etapa_anterior, local=local_anterior, hora="")
-            msg_retomada = _mensagem_retomada_fluxo(etapa_anterior, local_anterior)
-            if msg_retomada:
-                enviar_mensagem(phone, msg_retomada)
+            # Recupera opcao_submenu salva (se existir)
+            opcao_sub = buffer_v.get("_opcao_submenu")
+
+            # Caso especial: paciente estava em AGUARDA_SUBMENU, já tinha respondido
+            # a opcao do submenu na mesma mensagem que perguntou o valor, e já tem local.
+            # Ex: "retorno. quanto custa?" → ao confirmar, pula submenu e vai para turno.
+            if (etapa_anterior == ESTADO_AGUARDA_SUBMENU
+                    and opcao_sub in ("1", "2")
+                    and local_anterior):
+                atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_anterior, hora="")
+                enviar_mensagem(phone, msg.PERGUNTA_TURNO)
             else:
-                # Estado que nao tem mensagem de retomada simples (ex: AGUARDA_HORARIO)
-                # Apenas confirma e deixa paciente continuar
-                enviar_mensagem(phone,
-                    "Ótimo! Pode continuar de onde estavámos. 😊"
-                )
+                # Restaura estado anterior e manda mensagem correta
+                atualizar_estado(row, etapa=etapa_anterior, local=local_anterior, hora="")
+                msg_retomada = _mensagem_retomada_fluxo(etapa_anterior, local_anterior)
+                if msg_retomada:
+                    enviar_mensagem(phone, msg_retomada)
+                else:
+                    # Estado sem mensagem de retomada simples (ex: AGUARDA_HORARIO)
+                    enviar_mensagem(phone,
+                        "Ótimo! Pode continuar de onde estávamos. 😊"
+                    )
         elif confirmado is False:
             encaminhar_para_humano(phone, row, nome_salvo, texto)
         else:
