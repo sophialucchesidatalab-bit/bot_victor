@@ -660,6 +660,28 @@ def processar_mensagem(phone, nome, texto):
             except Exception:
                 turnos_extraidos = []
 
+            # Local identificado na primeira mensagem → vai direto para SUBMENU
+            hora_buffer_local = (
+                _json.dumps({"_turnos_pre": turnos_extraidos}, ensure_ascii=False)
+                if turnos_extraidos else ""
+            )
+            sucesso = criar_registro(
+                phone=phone, nome=nome,
+                etapa=ESTADO_AGUARDA_SUBMENU,
+                local=local_extraido, hora=hora_buffer_local,
+            )
+            if not sucesso:
+                logger.error(f"[{phone}] Falha ao criar registro")
+                enviar_mensagem(VICTOR_PHONE,
+                    f"⚠️ *Erro ao registrar novo contato!*\n\n"
+                    f"👤 *Nome:* {nome}\n"
+                    f"📞 *Telefone:* {phone}\n\n"
+                    f"_Falha ao gravar na planilha. Verificar manualmente._"
+                )
+                return
+            enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
+            return
+
         hora_buffer = (
             _json.dumps({"_turnos_pre": turnos_extraidos}, ensure_ascii=False)
             if turnos_extraidos else ""
