@@ -5,13 +5,13 @@ Funções de envio via Z-API (WhatsApp).
 
 import logging
 import requests
-from config import ZAPI_BASE_URL, ZAPI_CLIENT_TOKEN
+from config import ZAPI_BASE_URL, ZAPI_TOKEN
 
 logger = logging.getLogger(__name__)
 
 HEADERS = {"Content-Type": "application/json"}
 if ZAPI_CLIENT_TOKEN:
-    HEADERS["Client-Token"] = ZAPI_CLIENT_TOKEN
+    HEADERS["Client-Token"] = ZAPI_TOKEN
 
 
 def enviar_mensagem(phone: str, texto: str) -> bool:
