@@ -5,6 +5,24 @@ from bot import processar_mensagem
 from sheets import buscar_estado, criar_registro, atualizar_estado
 from config import ESTADO_ATENDIMENTO_HUMANO
 
+import hashlib
+import time
+
+# Cache de deduplicação — evita processar a mesma mensagem duas vezes
+_cache_dedup = {}
+_JANELA_DEDUP_SEGUNDOS = 15
+
+def _ja_processou(phone: str, texto: str) -> bool:
+    chave = hashlib.md5(f"{phone}:{texto}".encode()).hexdigest()
+    agora = time.time()
+    # Limpa entradas expiradas
+    expiradas = [k for k, t in _cache_dedup.items() if agora - t > _JANELA_DEDUP_SEGUNDOS]
+    for k in expiradas:
+        del _cache_dedup[k]
+    if chave in _cache_dedup:
+        return True
+    _cache_dedup[chave] = agora
+    return False
 # Números que nunca recebem bot — Victor atende manualmente
 NUMEROS_SEM_BOT = {
     "5521991640431",
