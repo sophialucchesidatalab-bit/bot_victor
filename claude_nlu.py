@@ -51,6 +51,15 @@ O menu tem 3 opções:
 2 = Marinadas do Nutri
 3 = Outros assuntos
 
+A opção 1 deve ser retornada para QUALQUER intenção de agendar ou tirar dúvida sobre consulta, incluindo:
+- "quero agendar", "quero marcar", "queria marcar", "gostaria de agendar"
+- "quero consulta", "queria uma consulta", "quero me consultar"
+- "tem vaga?", "tem horário?", "tem disponibilidade?"
+- "posso marcar?", "queria ver um horário", "agenda aberta?"
+- "quero atendimento", "marcar consulta", "agendar consulta"
+- "como faço para marcar?", "como agendar?"
+- qualquer variação que demonstre interesse em marcar uma consulta
+
 Responda APENAS com um JSON no formato:
 {{"opcao": "1"}}
 ou {{"opcao": "2"}}
@@ -66,14 +75,51 @@ Nenhum texto além do JSON."""
 
 
 # ─────────────────────────────────────────────
+# EXTRAÇÃO DE INTENÇÃO DO SUBMENU
+# ─────────────────────────────────────────────
+
+def extrair_opcao_submenu(texto: str) -> str | None:
+    """
+    Usa Claude NLU como fallback para identificar a opção do submenu
+    quando o regex não reconheceu a mensagem.
+    Submenu:
+      1 = Primeira consulta / Paciente novo
+      2 = Retorno / Acompanhamento
+      3 = Outra dúvida / Informação
+    """
+    prompt = f"""O paciente respondeu ao seguinte submenu de um consultório de nutrição:
+
+1 = Paciente novo (primeira consulta — nunca consultou antes)
+2 = Retorno / Acompanhamento (já é paciente, quer continuar)
+3 = Outra dúvida (não é sobre agendamento)
+
+Mensagem do paciente: "{texto}"
+
+Exemplos de opção 1: "nunca consultei", "sou novo", "primeira vez", "quero começar",
+"como funciona a primeira consulta", "nunca fui paciente", "quero iniciar acompanhamento"
+
+Exemplos de opção 2: "já sou paciente", "quero continuar", "acompanhamento",
+"quero voltar", "já fiz consulta", "quero dar continuidade", "preciso marcar retorno"
+
+Exemplos de opção 3: "tenho uma dúvida", "queria perguntar", "outra coisa",
+"quanto custa", "queria saber uma informação"
+
+Responda APENAS com JSON:
+{{"opcao": "1"}} ou {{"opcao": "2"}} ou {{"opcao": "3"}} ou {{"opcao": null}}
+
+Nenhum texto além do JSON."""
+
+    resultado = _chamar_claude(prompt)
+    if resultado and resultado.get("opcao"):
+        return resultado["opcao"]
+    return None
+
+
+# ─────────────────────────────────────────────
 # EXTRAÇÃO DE LOCAL + TURNO JUNTOS
 # ─────────────────────────────────────────────
 
 def extrair_local_e_turno(texto: str) -> dict:
-    """
-    Extrai local e turno de uma mensagem em linguagem natural.
-    Retorna dict com chaves: local, turno (cada um pode ser None)
-    """
     prompt = f"""{CONTEXTO_VICTOR}
 
 O lead enviou a seguinte mensagem:
@@ -122,7 +168,6 @@ def extrair_local(texto: str) -> str | None:
 # ─────────────────────────────────────────────
 
 def extrair_turno(texto: str) -> str | None:
-    """Extrai apenas o PRIMEIRO turno mencionado."""
     resultado = extrair_local_e_turno(texto)
     return resultado.get("turno")
 
@@ -132,11 +177,6 @@ def extrair_turno(texto: str) -> str | None:
 # ─────────────────────────────────────────────
 
 def extrair_multiplos_turnos(texto: str) -> list[str]:
-    """
-    Extrai TODOS os turnos mencionados pelo lead.
-    Ex: "De preferência manhã ou à noite" → ["Manhã", "Noite"]
-    Retorna lista ordenada (Manhã → Tarde → Noite).
-    """
     prompt = f"""{CONTEXTO_VICTOR}
 
 O lead enviou a seguinte mensagem sobre preferência de horário:
@@ -189,21 +229,10 @@ Nenhum texto além do JSON."""
 
 
 # ─────────────────────────────────────────────
-# EXTRAÇÃO DE DIAS DA SEMANA  ← NOVO
+# EXTRAÇÃO DE DIAS DA SEMANA
 # ─────────────────────────────────────────────
 
 def extrair_dias_semana(texto: str) -> dict:
-    """
-    Extrai todos os dias da semana mencionados e classifica em válidos/bloqueados.
-
-    Retorna:
-    {
-        "validos":    ["Qui", "Sex"],  # dias que Victor atende (Qua-Sáb)
-        "bloqueados": ["Ter"],         # dias que Victor NÃO atende (Seg/Ter/Dom)
-        "todos":      ["Ter", "Qui", "Sex"]
-    }
-    Lista vazia = nenhum dia daquele tipo foi mencionado.
-    """
     prompt = f"""{CONTEXTO_VICTOR}
 
 O lead enviou a seguinte mensagem:
@@ -223,7 +252,6 @@ Exemplos:
 - "só terça" → validos=[], bloqueados=["Ter"]
 - "sexta ou sábado" → validos=["Sex","Sáb"], bloqueados=[]
 - "de quarta em diante" → validos=["Qua","Qui","Sex","Sáb"], bloqueados=[]
-- "de quinta em diante" → validos=["Qui","Sex","Sáb"], bloqueados=[]
 - "qualquer dia" → validos=["Qua","Qui","Sex","Sáb"], bloqueados=[]
 - "segunda a sexta" → validos=["Qua","Qui","Sex"], bloqueados=["Seg","Ter"]
 - mensagem sem nenhum dia → validos=[], bloqueados=[]
@@ -281,10 +309,6 @@ Nenhum texto além do JSON."""
 # ─────────────────────────────────────────────
 
 def extrair_horario_escolhido(texto: str, slots_disponiveis: list[dict]) -> dict | None:
-    """
-    Identifica qual slot o lead escolheu dentre os disponíveis.
-    Retorna o dict do slot, "PERGUNTA" se for pergunta, ou None.
-    """
     if not slots_disponiveis:
         return None
 
