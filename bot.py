@@ -1,7 +1,5 @@
 import json as _json
 import logging
-import re as _re
-import unicodedata as _unicodedata
 from datetime import datetime
 
 from config import (
@@ -15,8 +13,6 @@ from config import (
     ESTADO_AGUARDA_DESCRICAO,
     ESTADO_AGUARDA_MARINADAS,
     ESTADO_ATENDIMENTO_HUMANO,
-    ESTADO_AGUARDA_NOME_FAMILIAR,
-    ESTADO_AGUARDA_CONFIRMACAO_VALOR,
     DURACAO_CONSULTA,
 )
 from sheets import buscar_estado, criar_registro, atualizar_estado
@@ -24,7 +20,6 @@ from sheets_agenda import buscar_horarios, remover_horario_confirmado
 from zapi import enviar_mensagem, enviar_imagem
 from claude_nlu import (
     extrair_opcao_menu,
-    extrair_opcao_submenu as extrair_opcao_submenu_nlu,
     extrair_local_e_turno,
     extrair_local,
     extrair_turno,
@@ -38,6 +33,7 @@ from mensagens import erro_nao_entendi
 
 logger = logging.getLogger(__name__)
 
+# Nomes completos dos dias para uso nas mensagens
 NOMES_DIAS = {
     "Seg": "Segunda-feira", "Ter": "Terça-feira", "Qua": "Quarta-feira",
     "Qui": "Quinta-feira",  "Sex": "Sexta-feira",  "Sáb": "Sábado", "Dom": "Domingo",
@@ -56,23 +52,51 @@ def normalizar_phone(phone):
 
 
 def normalizar(texto):
+    import unicodedata
     texto = texto.lower().strip()
-    texto = _unicodedata.normalize("NFD", texto)
-    return "".join(c for c in texto if _unicodedata.category(c) != "Mn")
+    texto = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
 def encaminhar_para_humano(phone, row, nome, texto):
-    atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
+    """Quando o bot não entende — encaminha para atendimento humano e notifica Victor."""
+    ok = atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
+    if not ok:
+        logger.error(f"[{phone}] FALHA ao gravar ATENDIMENTO_HUMANO na linha {row}")
     enviar_mensagem(phone, msg.ENCAMINHAR_HUMANO)
     enviar_mensagem(VICTOR_PHONE, msg.notif_nao_entendeu(nome, phone, texto))
+
+
+def _atualizar_estado_seguro(phone, row, etapa_destino, **kwargs) -> bool:
+    """
+    Wrapper de atualizar_estado com log detalhado e retorno explícito.
+    Loga telefone, etapa destino e todos os kwargs.
+    Retorna True se gravou com sucesso, False caso contrário.
+    """
+    logger.info(
+        f"[{phone}] gravando estado: row={row} etapa={etapa_destino} "
+        f"extras={kwargs}"
+    )
+    ok = atualizar_estado(row, etapa=etapa_destino, **kwargs)
+    if not ok:
+        logger.error(
+            f"[{phone}] FALHA ao gravar estado={etapa_destino} "
+            f"row={row} extras={kwargs}"
+        )
+    return ok
 
 
 # ─────────────────────────────────────────────
 # AVISO DE DIA BLOQUEADO
 # ─────────────────────────────────────────────
 
-def _montar_aviso_dia_bloqueado(bloqueados, local):
+def _montar_aviso_dia_bloqueado(bloqueados: list[str], local: str) -> str:
+    """
+    Monta mensagem avisando que o(s) dia(s) informado(s) não têm atendimento.
+    Todos os locais atendem de Quarta a Sábado.
+    """
     dias_bloq = ", ".join(NOMES_DIAS.get(d, d) for d in bloqueados)
+
     return (
         f"Infelizmente o Nutri Victor não atende às {dias_bloq}. 😕\n\n"
         f"O atendimento acontece de *Quarta a Sábado*.\n\n"
@@ -80,259 +104,62 @@ def _montar_aviso_dia_bloqueado(bloqueados, local):
     )
 
 
-def _verificar_dias_e_avisar(phone, texto, local):
+def _verificar_dias_e_avisar(phone, texto, local) -> bool:
+    """
+    Verifica se a mensagem menciona dias bloqueados.
+
+    Regras:
+    - Só dias bloqueados → envia aviso e retorna True (interrompe o fluxo)
+    - Mix de válidos + bloqueados → ignora bloqueados silenciosamente, retorna False
+    - Sem dias mencionados → retorna False
+
+    Retorna True se o fluxo deve ser interrompido (aviso enviado).
+    """
     try:
         dias = extrair_dias_semana(texto)
     except Exception:
         return False
+
     bloqueados = dias.get("bloqueados", [])
     validos    = dias.get("validos", [])
+
+    # Só bloqueados, sem nenhum válido → avisa
     if bloqueados and not validos:
-        aviso = _montar_aviso_dia_bloqueado(bloqueados, local or "nosso consultorio")
+        aviso = _montar_aviso_dia_bloqueado(bloqueados, local or "nosso consultório")
         enviar_mensagem(phone, aviso)
         return True
+
+    # Mix ou sem dias → segue normalmente
     return False
 
 
 # ─────────────────────────────────────────────
-# DETECCAO DE INTENCAO DE AGENDAMENTO
+# DETECÇÃO DE INTENÇÕES
 # ─────────────────────────────────────────────
-
-_PADROES_AGENDAMENTO = _re.compile(
-    r"\b("
-    r"quero\s+agendar|quero\s+marcar|queria\s+marcar|gostaria\s+de\s+agendar|"
-    r"quero\s+(?:uma\s+)?consulta|queria\s+(?:uma\s+)?consulta|"
-    r"tem\s+vaga|tem\s+horario|tem\s+disponibilidade|"
-    r"posso\s+marcar|queria\s+ver\s+(?:um\s+)?horario|"
-    r"agenda\s+aberta|quero\s+atendimento|"
-    r"marcar\s+consulta|agendar\s+consulta|"
-    r"gostaria\s+de\s+marcar|posso\s+agendar|"
-    r"como\s+(?:faco|faz[eo])\s+para\s+(?:marcar|agendar)|"
-    r"quero\s+(?:me\s+)?consultar|gostaria\s+de\s+(?:me\s+)?consultar"
-    r")\b"
-)
-
-
-def detectar_intencao_agendamento(texto):
-    t = normalizar(texto)
-    if _PADROES_AGENDAMENTO.search(t):
-        return True
-    try:
-        from claude_nlu import classificar_intencao
-        return classificar_intencao(texto) == "agendar"
-    except Exception:
-        return False
-
-
-# ─────────────────────────────────────────────
-# DETECCAO DE INTENCAO DE SABER MAIS
-# ─────────────────────────────────────────────
-
-_PADROES_INFO_CONSULTA = _re.compile(
-    r"\b("
-    r"quero\s+saber\s+mais|queria\s+saber\s+mais|gostaria\s+de\s+saber\s+mais|"
-    r"quero\s+saber\s+mais\s+sobre|queria\s+saber\s+mais\s+sobre|"
-    r"como\s+funciona|"
-    r"como\s+e\s+(?:a\s+)?(?:consulta|o\s+atendimento|o\s+acompanhamento|feito|o\s+trabalho)|"
-    r"queria\s+entender|pode\s+(?:me\s+)?explicar|me\s+explica|"
-    r"explicar\s+(?:melhor|como\s+funciona)|"
-    r"estou\s+(?:pensando|interessado|interessada)\s+em|"
-    r"(?:quero|queria|vou)\s+(?:come[cc]ar|iniciar)\s+acompanhamento|"
-    r"(?:quero|queria|vou)\s+(?:come[cc]ar|iniciar)\s+(?:a\s+)?consulta|"
-    r"tenho\s+interesse|"
-    r"quanto\s+tempo\s+dura"
-    r")\b"
-)
-
-
-def detectar_intencao_info_consulta(texto):
-    t = normalizar(texto)
-    return bool(_PADROES_INFO_CONSULTA.search(t))
-
-
-# ─────────────────────────────────────────────
-# DETECCAO DE INTENCAO DE AGENDAR PARA FAMILIAR
-# ─────────────────────────────────────────────
-
-_PADROES_FAMILIAR = _re.compile(
-    r"\b("
-    r"para\s+(?:meu|minha)\s*(?:marido|esposa|esposo|mulher|namorado|namorada|"
-    r"filho|filha|mae|pai|irma|irmao|amigo|amiga|familiar|parceiro|parceira)|"
-    r"para\s+outra\s+pessoa|"
-    r"para\s+ele\s+tambem|para\s+ela\s+tambem|"
-    r"quero\s+(?:marcar|agendar)\s+duas\s+pessoas|"
-    r"queria\s+dois\s+horarios|dois\s+horarios\s+seguidos|"
-    r"para\s+mim\s+e\s+para|"
-    r"no\s+mesmo\s+dia\s+(?:para|tambem)|"
-    r"tambem\s+(?:quer|vai)\s+(?:marcar|agendar)|"
-    r"seria\s+para\s+(?:meu|minha)"
-    r")\b"
-)
-
-
-def detectar_intencao_familiar(texto):
-    t = normalizar(texto)
-    return bool(_PADROES_FAMILIAR.search(t))
-
-
-
-
-# ─────────────────────────────────────────────
-# DETECCAO DE PERGUNTA DE VALOR
-# ─────────────────────────────────────────────
-
-_PADROES_VALOR = _re.compile(
-    r"\b("
-    # quanto custa / quanto é / quanto sai / quanto fica
-    r"quanto\s+(?:custa|e|que\s+e|fica|sai|ta|tah|esta|esta\s+custando|custando|preciso\s+investir)|"
-    # qual o valor / qual o investimento / qual o custo
-    r"qual\s+(?:o\s+)?(?:valor|investimento|custo|preco)|"
-    # palavras soltas (fuzzy)
-    r"\bvalor\b|\bpreco\b|\binvestimento\b|\bcusto\b|"
-    # gostaria de saber / poderia me informar
-    r"gostaria\s+de\s+saber\s+(?:o\s+)?(?:valor|quanto|preco)|"
-    r"pode(?:ria)?\s+(?:me\s+)?(?:informar|dizer)\s+(?:o\s+)?(?:valor|quanto)|"
-    # queria saber antes de marcar
-    r"queria\s+saber\s+(?:o\s+)?(?:valor|quanto|preco)|"
-    r"saber\s+quanto\s+custa\s+antes|saber\s+(?:o\s+)?valor\s+antes|"
-    # quanto custa com você / passar com o nutri
-    r"quanto\s+custa\s+(?:com|passar|se\s+consultar|atendimento)|"
-    r"quanto\s+custa\s+passar|quanto\s+custa\s+com\s+(?:voce|o\s+nutri)|"
-    # variações com erros de digitação comuns
-    r"valro|vaor|preco\s+da\s+consul|quanto\s+custa\s+consult"
-    r")\b"
-)
-
-# Estados em que NÃO interceptamos pergunta de valor
-_ESTADOS_SEM_INTERCEPTACAO_VALOR = {
-    ESTADO_ATENDIMENTO_HUMANO,
-    ESTADO_AGUARDA_CONFIRMACAO_VALOR,
-    ESTADO_AGUARDA_NOME_FAMILIAR,
-}
-
-
-def detectar_pergunta_valor(texto: str) -> bool:
-    """Retorna True se o paciente está perguntando o valor/preço da consulta."""
-    t = normalizar(texto)
-    return bool(_PADROES_VALOR.search(t))
-
-
-def _mensagem_retomada_fluxo(etapa_anterior: str, local: str) -> str:
-    """Retorna a mensagem de retomada adequada para o estado anterior."""
-    if etapa_anterior == ESTADO_AGUARDA_LOCAL:
-        return msg.PERGUNTA_LOCAL
-    if etapa_anterior in (ESTADO_AGUARDA_TURNO, ESTADO_AGUARDA_SUBMENU):
-        return msg.PERGUNTA_TURNO
-    if etapa_anterior == ESTADO_AGUARDA_OPCAO:
-        return msg.MENU_PRINCIPAL
-    # Para outros estados retorna string vazia (sem mensagem extra)
-    return ""
-
-# ─────────────────────────────────────────────
-# DETECCAO DE INTENCOES
-# ─────────────────────────────────────────────
-
-# Saudações puras — retorna None imediatamente sem chamar o Claude NLU
-# O bloco AGUARDA_OPCAO vai repetir o MENU_PRINCIPAL
-_SAUDACOES = {
-    "oi","ola","ola!","oi!","bom dia","boa tarde","boa noite",
-    "bom dia!","boa tarde!","boa noite!","oi tudo bem","ola tudo bem",
-    "hey","hello","hi","tudo bem","tudo bom","boa","salve","eai","e ai",
-    "opa","oie","oii","oiii","oi boa tarde","oi boa noite","oi bom dia",
-}
 
 def detectar_opcao_menu(t, texto_original=""):
-    # Saudacoes puras — retorna None imediatamente, sem custo de API
-    if t.strip() in _SAUDACOES:
-        return None
-
-    # Regex primeiro — custo zero, resposta instantânea
-    if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
-    if any(x in t for x in ["consul","acompanhamento","nutricional","nutri","retorno","agendar","agendamento","informacao","informacoes","primeira"]): return "1"
-    if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
-    if any(x in t for x in ["marinada","marinadas","tempero","produto"]): return "2"
-    if t in ["3", "3️⃣"] or t.startswith("3"): return "3"
-    if any(x in t for x in ["outro","outros","assunto","duvida","pergunta"]): return "3"
-
-    # Claude NLU apenas para frases não cobertas pelo regex
     try:
         opcao = extrair_opcao_menu(texto_original or t)
         if opcao:
             return opcao
     except Exception:
         pass
+    if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
+    if any(x in t for x in ["consul","acompanhamento","nutricional","nutri","retorno","agendar","agendamento","informacao","informacoes","primeira"]): return "1"
+    if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
+    if any(x in t for x in ["marinada","marinadas","tempero","produto"]): return "2"
+    if t in ["3", "3️⃣"] or t.startswith("3"): return "3"
+    if any(x in t for x in ["outro","outros","assunto","duvida","pergunta"]): return "3"
     return None
 
 
-def detectar_opcao_submenu(t, texto_original=""):
+def detectar_opcao_submenu(t):
     if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
-    if any(x in t for x in [
-        # diretas
-        "primeira","novo","nunca fui","primeira vez","nunca consultei",
-        "nunca fiz","nunca passei","primeira consulta","paciente novo",
-        "novo paciente","nao tenho cadastro","nao sou cadastrado",
-        "quero comecar","quero iniciar","primeira visita",
-        # variações naturais
-        "nunca fiz consulta","nunca consultei antes","nunca passei com",
-        "nunca fui paciente","nao sou paciente ainda","nao sou paciente",
-        "quero comecar com","quero comecar acompanhamento",
-        "quero iniciar acompanhamento","queria comecar","queria iniciar",
-        "queria saber como comecar","queria marcar minha primeira",
-        "quero fazer minha primeira","quero marcar primeira",
-        "quero agendar primeira",
-        # com dúvida inicial sobre como funciona (primeira vez)
-        "como faco para comecar","como faco para marcar primeira",
-        "como funciona a primeira","como funciona consulta com",
-        # curtas / informais
-        "sou novo","novo aqui","quero comecar contigo",
-        "quero iniciar contigo","iniciar acompanhamento",
-        # com erro de digitação comum
-        "nunca fiz consuta","primeira consuta","quero comecar consuta",
-        "quero inicia acompanhamento",
-    ]): return "1"
+    if any(x in t for x in ["primeira","novo","nunca fui","primeira vez"]): return "1"
     if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
-    if any(x in t for x in [
-        # diretas
-        "retorno","voltar","ja fui","segunda","acompanhamento",
-        "ja consultei","ja fiz consulta","ja passei","sou paciente",
-        "ja sou paciente","quero retornar","continuacao","continuar",
-        "dar continuidade","ja tenho cadastro","retornar",
-        # variações naturais
-        "ja consultei com","ja fiz consulta com","quero continuar acompanhamento",
-        "quero continuar com","quero voltar","quero voltar a consultar",
-        "quero voltar ao acompanhamento","quero retornar consulta",
-        "quero remarcar retorno","preciso marcar retorno",
-        "quero fazer retorno","quero agendar retorno",
-        "quero continuar tratamento","quero continuar plano",
-        "quero voltar consulta","reagendar retorno",
-        # curtas
-        "continuidade","voltar",
-        # com erro de digitação
-        "ja consutei","quero retorna","quero continua","retorno consulta",
-    ]): return "2"
+    if any(x in t for x in ["retorno","voltar","ja fui","segunda"]): return "2"
     if t in ["3", "3️⃣"] or t.startswith("3"): return "3"
-    if any(x in t for x in [
-        # diretas
-        "outro","outros","informacao","duvida","outra coisa",
-        "outra duvida","outra pergunta","nao e sobre consulta",
-        "quero saber outra","tenho uma pergunta",
-        # variações naturais
-        "tenho uma duvida","queria tirar uma duvida","queria perguntar",
-        "posso tirar uma duvida","posso fazer uma pergunta",
-        "queria saber uma coisa","queria saber uma informacao",
-        "tem como me explicar",
-        # curtas
-        "pergunta","queria saber",
-        # com erro de digitação
-        "tenho duvida","queria tira uma duvida",
-    ]): return "3"
-    # Fallback: Claude NLU para frases que o regex não cobriu
-    try:
-        opcao_nlu = extrair_opcao_submenu_nlu(texto_original if 'texto_original' in dir() else t)
-        if opcao_nlu:
-            return opcao_nlu
-    except Exception:
-        pass
+    if any(x in t for x in ["outro","outros","informacao","duvida"]): return "3"
     return None
 
 
@@ -370,13 +197,15 @@ def detectar_turno(texto):
     return None
 
 
-def detectar_turnos(texto):
+def detectar_turnos(texto: str) -> list[str]:
+    """Retorna LISTA de turnos mencionados (suporta múltiplos)."""
     try:
         turnos = extrair_multiplos_turnos(texto)
         if turnos:
             return turnos
     except Exception:
         pass
+
     t = normalizar(texto)
     turnos = []
     if any(x in t for x in ["manha", "cedo", "matutino"]):
@@ -402,7 +231,7 @@ def detectar_confirmacao(texto):
         "sim", "confirmo", "confirmar", "confirmado", "correto", "certo",
         "isso", "ok", "pode", "pode ser", "fechado", "combinado",
         "perfeito", "exato", "exatamente", "isso mesmo", "show",
-        "beleza", "otimo", "ta bom", "valeu", "vai nessa", "marca ai", "podemos", "vamos"
+        "beleza", "otimo", "ta bom", "valeu", "vai nessa", "marca ai"
     ]):
         return True
     if any(x in t for x in [
@@ -440,7 +269,8 @@ def detectar_endereco(texto):
 # HELPERS DE SLOTS
 # ─────────────────────────────────────────────
 
-def buscar_slots_por_turnos(local, turnos):
+def buscar_slots_por_turnos(local: str, turnos: list[str]) -> list[dict]:
+    """Busca slots de múltiplos turnos, mescla sem duplicatas e ordena cronologicamente."""
     todos_slots = []
     slots_vistos = set()
     for turno in turnos:
@@ -459,32 +289,6 @@ def buscar_slots_por_turnos(local, turnos):
 
     todos_slots.sort(key=sort_slot)
     return todos_slots
-
-
-def buscar_slots_seguidos(local, data, hora_confirmada):
-    """
-    Busca slots no mesmo local/data imediatamente apos o horario confirmado.
-    Tolerancia de +-10min para variacoes de grade.
-    """
-    if not data or not hora_confirmada:
-        return []
-
-    duracao = DURACAO_CONSULTA.get(local, 90)
-    todos   = buscar_slots_por_turnos(local, ["Manhã", "Tarde", "Noite"])
-    do_dia  = [s for s in todos if s["data"] == data]
-
-    if not do_dia:
-        return []
-
-    def hm_to_min(h):
-        try:
-            hh, mm = h.split(":")
-            return int(hh) * 60 + int(mm)
-        except Exception:
-            return -1
-
-    fim_confirmado = hm_to_min(hora_confirmada) + duracao
-    return [s for s in do_dia if abs(hm_to_min(s["hora_inicio"]) - fim_confirmado) <= 10]
 
 
 def formatar_horarios_para_mensagem(slots, local_bot):
@@ -525,7 +329,8 @@ def formatar_horarios_para_mensagem(slots, local_bot):
     )
 
 
-def _recuperar_turnos_pre(registro):
+def _recuperar_turnos_pre(registro: dict) -> list[str]:
+    """Lê o buffer de turnos pré-extraídos do campo 'hora'."""
     hora_raw = registro.get("hora", "")
     if not hora_raw:
         return []
@@ -538,48 +343,49 @@ def _recuperar_turnos_pre(registro):
     return []
 
 
-def _recuperar_hora_confirmada(registro):
-    """Extrai hora_inicio do slot confirmado guardado no campo hora."""
-    hora_raw = registro.get("hora", "")
-    if not hora_raw:
-        return ""
-    try:
-        parsed = _json.loads(hora_raw)
-        if isinstance(parsed, dict) and "hora_inicio" in parsed:
-            return parsed.get("hora_inicio", "")
-    except Exception:
-        pass
-    import re
-    if re.match(r"^\d{2}:\d{2}$", hora_raw.strip()):
-        return hora_raw.strip()
-    return ""
-
-
 def _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre):
+    """
+    Após definir tipo de consulta, envia slots (se há turnos salvos) ou pergunta turno.
+    Limpa o buffer de turnos antes de agir.
+    """
     atualizar_estado(row, hora="")
+
     if turnos_pre:
         slots = buscar_slots_por_turnos(local, turnos_pre)
         if slots:
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_HORARIO,
-                             hora=_json.dumps(slots, ensure_ascii=False))
+            ok = _atualizar_estado_seguro(
+                phone, row, ESTADO_AGUARDA_HORARIO,
+                hora=_json.dumps(slots, ensure_ascii=False)
+            )
+            if not ok:
+                enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+                return
             enviar_mensagem(phone, formatar_horarios_para_mensagem(slots, local))
         else:
             turno_label = " / ".join(turnos_pre)
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO, hora=turno_label)
+            ok = _atualizar_estado_seguro(
+                phone, row, ESTADO_ATENDIMENTO_HUMANO,
+                hora=turno_label
+            )
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar ATENDIMENTO_HUMANO após sem slots")
             enviar_mensagem(phone, msg.SEM_HORARIOS_DISPONIVEIS)
             enviar_mensagem(VICTOR_PHONE, msg.notif_triagem(nome_salvo, phone, local, turno_label))
     else:
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO)
+        ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_TURNO)
+        if not ok:
+            enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+            return
         enviar_mensagem(phone, msg.PERGUNTA_TURNO)
 
 
 # ─────────────────────────────────────────────
-# HELPERS DE HORARIO
+# HELPERS DE HORÁRIO
 # ─────────────────────────────────────────────
 
 def identificar_slot_escolhido(texto, slots):
-    import re as _re2
-    texto = _re2.sub(r"[*_~]", "", texto).strip()
+    import re as _re
+    texto = _re.sub(r"[*_~]", "", texto).strip()
     try:
         slot = extrair_horario_escolhido(texto, slots)
         if slot == "PERGUNTA":
@@ -699,147 +505,55 @@ def processar_mensagem(phone, nome, texto):
 
     registro = buscar_estado(phone)
 
-    # ── NOVO CONTATO
+    # ── NOVO CONTATO ──────────────────────────────────────────────────────────
     if registro is None:
-        local_extraido   = None
+        # Tenta extrair local e turnos da primeira mensagem
+        local_extraido = None
         turnos_extraidos = []
         try:
-            resultado_nlu  = extrair_local_e_turno(texto)
+            resultado_nlu = extrair_local_e_turno(texto)
             local_extraido = resultado_nlu.get("local")
         except Exception:
             pass
 
         if local_extraido:
+            # Verifica dias bloqueados na primeira mensagem
             try:
-                dias       = extrair_dias_semana(texto)
+                dias = extrair_dias_semana(texto)
                 bloqueados = dias.get("bloqueados", [])
                 validos    = dias.get("validos", [])
                 if bloqueados and not validos:
-                    aviso   = _montar_aviso_dia_bloqueado(bloqueados, local_extraido)
-                    sucesso = criar_registro(
-                        phone=phone, nome=nome,
+                    aviso = _montar_aviso_dia_bloqueado(bloqueados, local_extraido)
+                    criar_registro(
+                        phone=phone,
+                        nome=nome,
                         etapa=ESTADO_AGUARDA_SUBMENU,
-                        local=local_extraido, hora="",
+                        local=local_extraido,
+                        hora="",
                     )
-                    if not sucesso:
-                        logger.error(f"[{phone}] Falha ao criar registro")
-                        enviar_mensagem(VICTOR_PHONE,
-                            f"⚠️ *Erro ao registrar novo contato!*\n\n"
-                            f"👤 *Nome:* {nome}\n"
-                            f"📞 *Telefone:* {phone}\n\n"
-                            f"_Falha ao gravar na planilha. Verificar manualmente._"
-                        )
-                        return
                     enviar_mensagem(phone, aviso)
                     return
             except Exception:
                 pass
+
             try:
                 turnos_extraidos = detectar_turnos(texto)
             except Exception:
                 turnos_extraidos = []
-
-            # Local identificado na primeira mensagem → vai direto para SUBMENU
-            hora_buffer_local = (
-                _json.dumps({"_turnos_pre": turnos_extraidos}, ensure_ascii=False)
-                if turnos_extraidos else ""
-            )
-            sucesso = criar_registro(
-                phone=phone, nome=nome,
-                etapa=ESTADO_AGUARDA_SUBMENU,
-                local=local_extraido, hora=hora_buffer_local,
-            )
-            if not sucesso:
-                logger.error(f"[{phone}] Falha ao criar registro")
-                enviar_mensagem(VICTOR_PHONE,
-                    f"⚠️ *Erro ao registrar novo contato!*\n\n"
-                    f"👤 *Nome:* {nome}\n"
-                    f"📞 *Telefone:* {phone}\n\n"
-                    f"_Falha ao gravar na planilha. Verificar manualmente._"
-                )
-                return
-            enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
-            return
 
         hora_buffer = (
             _json.dumps({"_turnos_pre": turnos_extraidos}, ensure_ascii=False)
             if turnos_extraidos else ""
         )
 
-        # Pergunta de valor como primeira mensagem
-        if not local_extraido and detectar_pergunta_valor(texto):
-            logger.info(f"[{phone}] Pergunta de valor na primeira mensagem — INFO_PRIMEIRA_CONSULTA")
-            sucesso = criar_registro(
-                phone=phone, nome=nome,
-                etapa=ESTADO_AGUARDA_LOCAL, local="", hora=hora_buffer,
-            )
-            if not sucesso:
-                logger.error(f"[{phone}] Falha ao criar registro")
-                enviar_mensagem(VICTOR_PHONE,
-                    f"⚠️ *Erro ao registrar novo contato!*\n\n"
-                    f"👤 *Nome:* {nome}\n"
-                    f"📞 *Telefone:* {phone}\n\n"
-                    f"_Falha ao gravar na planilha. Verificar manualmente._"
-                )
-                return
-            enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
-            return
-
-        # Intencao de agendar sem local
-        if not local_extraido and detectar_intencao_agendamento(texto):
-            logger.info(f"[{phone}] Intencao de agendamento — AGUARDA_LOCAL")
-            sucesso = criar_registro(
-                phone=phone, nome=nome,
-                etapa=ESTADO_AGUARDA_LOCAL, local="", hora=hora_buffer,
-            )
-            if not sucesso:
-                logger.error(f"[{phone}] Falha ao criar registro")
-                enviar_mensagem(VICTOR_PHONE,
-                    f"⚠️ *Erro ao registrar novo contato!*\n\n"
-                    f"👤 *Nome:* {nome}\n"
-                    f"📞 *Telefone:* {phone}\n\n"
-                    f"_Falha ao gravar na planilha. Verificar manualmente._"
-                )
-                return
-            enviar_mensagem(phone, msg.MENU_PRINCIPAL)
-            return
-
-        # Interesse em saber mais
-        if not local_extraido and detectar_intencao_info_consulta(texto):
-            logger.info(f"[{phone}] Interesse em info — INFO_PRIMEIRA_CONSULTA")
-            sucesso = criar_registro(
-                phone=phone, nome=nome,
-                etapa=ESTADO_AGUARDA_LOCAL, local="", hora=hora_buffer,
-            )
-            if not sucesso:
-                logger.error(f"[{phone}] Falha ao criar registro")
-                enviar_mensagem(VICTOR_PHONE,
-                    f"⚠️ *Erro ao registrar novo contato!*\n\n"
-                    f"👤 *Nome:* {nome}\n"
-                    f"📞 *Telefone:* {phone}\n\n"
-                    f"_Falha ao gravar na planilha. Verificar manualmente._"
-                )
-                return
-            enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
-            return
-
-        # Fluxo padrao — saudacoes e mensagens nao identificadas
-        # Vai para MENU_PRINCIPAL (opcao 1/2/3) e nao direto para o submenu
-        sucesso = criar_registro(
-            phone=phone, nome=nome,
-            etapa=ESTADO_AGUARDA_OPCAO,
-            local=local_extraido or "", hora=hora_buffer,
+        criar_registro(
+            phone=phone,
+            nome=nome,
+            etapa=ESTADO_AGUARDA_SUBMENU,
+            local=local_extraido or "",
+            hora=hora_buffer,
         )
-        if not sucesso:
-            logger.error(f"[{phone}] Falha ao criar registro")
-            enviar_mensagem(VICTOR_PHONE,
-                f"⚠️ *Erro ao registrar novo contato!*\n\n"
-                f"👤 *Nome:* {nome}\n"
-                f"📞 *Telefone:* {phone}\n\n"
-                f"_Falha ao gravar na planilha. Verificar manualmente._"
-            )
-            return
-        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+        enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
         return
 
     etapa      = registro.get("etapa", ESTADO_AGUARDA_OPCAO)
@@ -847,92 +561,9 @@ def processar_mensagem(phone, nome, texto):
     row        = registro.get("row_number")
     nome_salvo = registro.get("nome", nome) or nome
 
-    logger.info(f"[{phone}] etapa={etapa} local={local}")
+    logger.info(f"[{phone}] etapa={etapa} local={local} row={row}")
 
-    # ── INTERCEPTACAO GLOBAL: familiar
-    if (etapa not in (ESTADO_ATENDIMENTO_HUMANO, ESTADO_AGUARDA_NOME_FAMILIAR)
-            and detectar_intencao_familiar(texto)):
-
-        data_confirmada = registro.get("data", "")
-        local_familiar  = local
-        hora_confirmada = _recuperar_hora_confirmada(registro)
-
-        if data_confirmada and local_familiar and hora_confirmada:
-            slots_seguidos = buscar_slots_seguidos(local_familiar, data_confirmada, hora_confirmada)
-
-            if slots_seguidos:
-                buffer_familiar = _json.dumps({
-                    "_familiar_slots": slots_seguidos,
-                    "_familiar_data":  data_confirmada,
-                    "_familiar_local": local_familiar,
-                }, ensure_ascii=False)
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_NOME_FAMILIAR, hora=buffer_familiar)
-
-                slot_s     = slots_seguidos[0]
-                nome_dia_f = NOMES_DIAS.get(slot_s["dia"], slot_s["dia"])
-                horas_str  = " / ".join(s["hora_inicio"] for s in slots_seguidos)
-
-                enviar_mensagem(phone,
-                    f"😊 Ótimo! Encontrei o seguinte horário disponível em sequência:\n\n"
-                    f"📅 *{nome_dia_f} ({data_confirmada})*\n"
-                    f"⏰ *{horas_str}*\n"
-                    f"📍 *{local_familiar}*\n\n"
-                    f"Qual é o nome completo do familiar?"
-                )
-            else:
-                atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
-                enviar_mensagem(phone,
-                    f"Infelizmente não há horários disponíveis em sequência nesse dia. 😕\n\n"
-                    f"O *Nutri Victor* entrará em contato para verificar outras opções!"
-                )
-                enviar_mensagem(VICTOR_PHONE,
-                    f"👥 *Paciente quer agendar para familiar*\n\n"
-                    f"👤 *Nome:* {nome_salvo}\n"
-                    f"📞 *Telefone:* {phone}\n"
-                    f"📍 *Local:* {local_familiar}\n"
-                    f"📅 *Data solicitada:* {data_confirmada}\n\n"
-                    f"_Sem horário seguido disponível — verificar manualmente._"
-                )
-        else:
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
-            enviar_mensagem(phone,
-                f"Para agendar para um familiar, primeiro precisamos confirmar o seu horário. 😊\n\n"
-                f"O *Nutri Victor* entrará em contato para ajudar!"
-            )
-            enviar_mensagem(VICTOR_PHONE,
-                f"👥 *Interesse em agendar para familiar (sem data confirmada)*\n\n"
-                f"👤 *Nome:* {nome_salvo}\n"
-                f"📞 *Telefone:* {phone}\n\n"
-                f"_Lead não tem agendamento confirmado ainda._"
-            )
-        return
-
-    # ── INTERCEPTACAO GLOBAL: pergunta de valor
-    # Salva etapa atual em buffer, responde valor, muda para AGUARDA_CONFIRMACAO_VALOR.
-    # Ao confirmar, restaura a etapa anterior e retoma o fluxo de onde parou.
-    if (etapa not in _ESTADOS_SEM_INTERCEPTACAO_VALOR
-            and detectar_pergunta_valor(texto)):
-
-        # Se estiver em AGUARDA_SUBMENU, tenta extrair opcao do submenu da mesma mensagem
-        # Ex: "retorno. quanto custa mesmo?" → opcao_submenu = "2"
-        opcao_submenu_salva = None
-        if etapa == ESTADO_AGUARDA_SUBMENU:
-            opcao_submenu_salva = detectar_opcao_submenu(texto_norm, texto)
-
-        buffer_valor = _json.dumps({
-            "_etapa_anterior": etapa,
-            "_local_anterior": local,
-            "_opcao_submenu": opcao_submenu_salva,
-        }, ensure_ascii=False)
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_CONFIRMACAO_VALOR, hora=buffer_valor)
-
-        enviar_mensagem(phone,
-            "O valor do investimento é R$ 300,00 para o acompanhamento com o "
-            "Nutri Victor por três meses. Podemos seguir com o agendamento?"
-        )
-        return
-
-    # Atalho: endereco
+    # Atalho: endereço
     if detectar_endereco(texto_norm) and local:
         if local == "Copacabana":
             enviar_mensagem(phone, msg.ENDERECO_COPA)
@@ -940,138 +571,245 @@ def processar_mensagem(phone, nome, texto):
             enviar_mensagem(phone, msg.ENDERECO_MEIER)
         return
 
-    # ── MENU PRINCIPAL
+    # ── MENU PRINCIPAL ────────────────────────────────────────────────────────
     if etapa == ESTADO_AGUARDA_OPCAO:
         opcao = detectar_opcao_menu(texto_norm, texto)
+        logger.info(f"[{phone}] AGUARDA_OPCAO: texto='{texto}' opcao_detectada={opcao}")
         if opcao == "1":
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_SUBMENU)
+            if not ok:
+                enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+                return
             enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
         elif opcao == "2":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO)
             enviar_mensagem(phone, msg.MARINADAS)
             enviar_mensagem(VICTOR_PHONE, msg.notif_marinadas(nome_salvo, phone))
         elif opcao == "3":
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_DESCRICAO)
+            if not ok:
+                enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+                return
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
         else:
-            # Nao reconheceu opcao — repete o menu (nao encaminha para humano)
-            # Ex: saudacoes como "bom dia", "oi" chegam aqui quando ja ha registro
-            enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+            encaminhar_para_humano(phone, row, nome_salvo, texto)
 
-    # ── SUBMENU
+    # ── SUBMENU ───────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_SUBMENU:
-        opcao = detectar_opcao_submenu(texto_norm, texto)
+        opcao = detectar_opcao_submenu(texto_norm)
+        logger.info(f"[{phone}] AGUARDA_SUBMENU: texto='{texto}' opcao_detectada={opcao}")
+
         if opcao == "3":
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_DESCRICAO)
+            if not ok:
+                enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+                return
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
             return
+
         if opcao not in ("1", "2"):
             encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
+
         turnos_pre = _recuperar_turnos_pre(registro)
+
         if opcao == "1":
             if local:
                 enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
                 _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre)
             else:
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
+                ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_LOCAL)
+                if not ok:
+                    enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+                    return
                 enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
+
         elif opcao == "2":
             if local:
                 _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre)
             else:
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_LOCAL)
+                ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_LOCAL)
+                if not ok:
+                    enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
+                    return
                 enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
 
-    # ── LOCAL
+    # ── LOCAL ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_LOCAL:
         if detectar_endereco(texto_norm):
             enviar_mensagem(phone, msg.ENDERECO_COPA)
             enviar_mensagem(phone, msg.ENDERECO_MEIER)
             enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
             return
+
         local_detectado = detectar_local(texto)
+        logger.info(f"[{phone}] AGUARDA_LOCAL: texto='{texto}' local_detectado={local_detectado}")
+
         if local_detectado:
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_detectado)
+            ok = _atualizar_estado_seguro(
+                phone, row, ESTADO_AGUARDA_TURNO,
+                local=local_detectado
+            )
+            if not ok:
+                # Falha de persistência: pede o local novamente sem encaminhar humano
+                logger.warning(f"[{phone}] AGUARDA_LOCAL: falha ao gravar local={local_detectado}, pedindo novamente")
+                enviar_mensagem(phone,
+                    "Tive uma instabilidade técnica ao salvar sua escolha. 😕\n\n"
+                    "Poderia me informar novamente qual local prefere?\n\n"
+                    + msg.PERGUNTA_LOCAL
+                )
+                return
             enviar_mensagem(phone, msg.PERGUNTA_TURNO)
         else:
-            encaminhar_para_humano(phone, row, nome_salvo, texto)
+            # Não detectou local: repete a pergunta (máx 1 tentativa antes de ir para humano)
+            # Tenta via Claude se texto_norm tiver contexto suficiente
+            logger.warning(f"[{phone}] AGUARDA_LOCAL: local não detectado no texto='{texto}'")
+            enviar_mensagem(phone,
+                "Não consegui identificar o local. 😅\n\n"
+                "Por favor, escolha uma das opções:\n\n"
+                + msg.PERGUNTA_LOCAL
+            )
 
-    # ── TURNO
+    # ── TURNO ─────────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_TURNO:
+        # Verifica dias bloqueados antes de processar turnos
         if _verificar_dias_e_avisar(phone, texto, local):
             return
+
         turnos_detectados = detectar_turnos(texto)
+        logger.info(
+            f"[{phone}] AGUARDA_TURNO: texto='{texto}' local={local} "
+            f"turnos_detectados={turnos_detectados}"
+        )
+
         if not turnos_detectados:
-            encaminhar_para_humano(phone, row, nome_salvo, texto)
+            # Não encaminha para humano imediatamente — repete a pergunta contextualmente
+            logger.warning(f"[{phone}] AGUARDA_TURNO: nenhum turno detectado em '{texto}'")
+            enviar_mensagem(phone,
+                "Não consegui identificar sua preferência de horário. 😅\n\n"
+                "Você prefere *Manhã* (até 12h), *Tarde* (12h–18h) ou *Noite* (após 18h)?\n\n"
+                "Pode responder com o nome do turno ou um horário aproximado. 😊"
+            )
             return
+
         slots = buscar_slots_por_turnos(local, turnos_detectados)
+        logger.info(f"[{phone}] AGUARDA_TURNO: {len(slots)} slots encontrados para {local}/{turnos_detectados}")
+
         if not slots:
             turno_label = " / ".join(turnos_detectados)
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO, hora=turno_label)
+            ok = _atualizar_estado_seguro(
+                phone, row, ESTADO_ATENDIMENTO_HUMANO,
+                hora=turno_label
+            )
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar ATENDIMENTO_HUMANO após sem slots")
             enviar_mensagem(phone, msg.SEM_HORARIOS_DISPONIVEIS)
             enviar_mensagem(VICTOR_PHONE, msg.notif_triagem(nome_salvo, phone, local, turno_label))
             return
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_HORARIO,
-                         hora=_json.dumps(slots, ensure_ascii=False))
+
+        ok = _atualizar_estado_seguro(
+            phone, row, ESTADO_AGUARDA_HORARIO,
+            hora=_json.dumps(slots, ensure_ascii=False)
+        )
+        if not ok:
+            # Falha ao gravar: não envia a lista de slots pois o estado não foi salvo
+            logger.error(f"[{phone}] AGUARDA_TURNO: falha ao gravar AGUARDA_HORARIO, pedindo turno novamente")
+            enviar_mensagem(phone,
+                "Tive uma instabilidade técnica ao salvar sua preferência. 😕\n\n"
+                "Poderia me informar novamente qual turno prefere? "
+                "(*Manhã*, *Tarde* ou *Noite*) 😊"
+            )
+            return
+
         enviar_mensagem(phone, formatar_horarios_para_mensagem(slots, local))
 
-    # ── ESCOLHA DO HORARIO
+    # ── ESCOLHA DO HORÁRIO ────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_HORARIO:
         if detectar_dia_bloqueado(texto):
             enviar_mensagem(phone, msg.ERRO_DIA_BLOQUEADO)
             return
+
         if detectar_depois_confirmo(texto):
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_ATENDIMENTO_HUMANO)
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar ATENDIMENTO_HUMANO (decide depois)")
             enviar_mensagem(phone, msg.AGUARDA_CONFIRMACAO_DEPOIS)
             enviar_mensagem(VICTOR_PHONE, msg.notif_decide_depois(nome_salvo, phone, local))
             return
+
         try:
             slots = _json.loads(registro.get("hora", "[]"))
             if isinstance(slots, dict):
                 slots = []
         except Exception:
             slots = []
+
         if not slots:
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_TURNO)
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar AGUARDA_TURNO (slots expirados)")
             enviar_mensagem(phone, msg.ERRO_SLOTS_EXPIRADOS)
             return
+
         slot_escolhido = identificar_slot_escolhido(texto, slots)
+        logger.info(f"[{phone}] AGUARDA_HORARIO: texto='{texto}' slot_escolhido={slot_escolhido}")
+
         if slot_escolhido == "PERGUNTA":
             resposta = responder_pergunta_horario(texto, slots, local)
             enviar_mensagem(phone, resposta)
             return
+
         if not slot_escolhido:
             encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
-        atualizar_estado(
-            row,
-            etapa=ESTADO_AGUARDA_CONFIRMACAO,
+
+        ok = _atualizar_estado_seguro(
+            phone, row, ESTADO_AGUARDA_CONFIRMACAO,
             data=slot_escolhido["data"],
             hora=_json.dumps(slot_escolhido, ensure_ascii=False),
         )
+        if not ok:
+            logger.error(f"[{phone}] AGUARDA_HORARIO: falha ao gravar AGUARDA_CONFIRMACAO, pedindo horário novamente")
+            enviar_mensagem(phone,
+                "Tive uma instabilidade técnica ao salvar sua escolha. 😕\n\n"
+                "Poderia me informar novamente qual horário prefere? 😊"
+            )
+            return
+
         enviar_mensagem(phone, msg.confirmacao_agendamento(
             nome=nome_salvo, local=local,
             data=slot_escolhido["data"], dia=slot_escolhido["dia"],
             hora=slot_escolhido["hora_inicio"],
         ))
 
-    # ── CONFIRMACAO
+    # ── CONFIRMAÇÃO ───────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_CONFIRMACAO:
         confirmado = detectar_confirmacao(texto)
+        logger.info(f"[{phone}] AGUARDA_CONFIRMACAO: texto='{texto}' confirmado={confirmado}")
+
         if confirmado is None:
-            encaminhar_para_humano(phone, row, nome_salvo, texto)
+            # Não encaminha para humano imediatamente — repete a pergunta
+            logger.warning(f"[{phone}] AGUARDA_CONFIRMACAO: confirmação não detectada em '{texto}'")
+            enviar_mensagem(phone,
+                "Não entendi sua resposta. 😅\n\n"
+                "Você confirma o agendamento? Responda *sim* para confirmar ou *não* para escolher outro horário. 😊"
+            )
             return
+
         try:
             slot = _json.loads(registro.get("hora", "{}"))
             if isinstance(slot, list):
                 slot = {}
         except Exception:
             slot = {}
+
         if not slot:
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_TURNO)
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar AGUARDA_TURNO (slot expirado na confirmação)")
             enviar_mensagem(phone, msg.ERRO_SLOTS_EXPIRADOS)
             return
+
         if confirmado:
             remover_horario_confirmado(
                 local_bot=local,
@@ -1079,8 +817,12 @@ def processar_mensagem(phone, nome, texto):
                 hora_confirmada=slot["hora_inicio"],
                 duracao_min=DURACAO_CONSULTA.get(local, 90),
             )
-            atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
-                             data=slot["data"], hora=slot["hora_inicio"])
+            ok = _atualizar_estado_seguro(
+                phone, row, ESTADO_ATENDIMENTO_HUMANO,
+                data=slot["data"], hora=slot["hora_inicio"]
+            )
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar ATENDIMENTO_HUMANO após confirmação")
             enviar_mensagem(phone, msg.confirmacao_final(
                 nome=nome_salvo, data=slot["data"], dia=slot["dia"],
                 hora=slot["hora_inicio"], endereco=msg.endereco_para_local(local),
@@ -1093,118 +835,34 @@ def processar_mensagem(phone, nome, texto):
                 data=slot["data"], hora=slot["hora_inicio"],
             ))
         else:
-            atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO)
+            ok = _atualizar_estado_seguro(phone, row, ESTADO_AGUARDA_TURNO)
+            if not ok:
+                logger.error(f"[{phone}] FALHA ao gravar AGUARDA_TURNO (recusou confirmação)")
             enviar_mensagem(phone, msg.REAGENDAMENTO)
             enviar_mensagem(phone, msg.PERGUNTA_TURNO)
 
-    # ── NOME DO FAMILIAR
-    elif etapa == ESTADO_AGUARDA_NOME_FAMILIAR:
-        nome_familiar = texto.strip()
-        if not nome_familiar or len(nome_familiar) < 2:
-            enviar_mensagem(phone, "Por favor, me informe o nome completo do familiar. 😊")
-            return
-        try:
-            buffer         = _json.loads(registro.get("hora", "{}"))
-            slots_seguidos = buffer.get("_familiar_slots", [])
-            data_familiar  = buffer.get("_familiar_data", "")
-            local_familiar = buffer.get("_familiar_local", local)
-        except Exception:
-            slots_seguidos, data_familiar, local_familiar = [], "", local
-        if not slots_seguidos or not data_familiar:
-            encaminhar_para_humano(phone, row, nome_salvo, texto)
-            return
-        slot_f      = slots_seguidos[0]
-        nome_dia_nf = NOMES_DIAS.get(slot_f["dia"], slot_f["dia"])
-        remover_horario_confirmado(
-            local_bot=local_familiar,
-            data_confirmada=data_familiar,
-            hora_confirmada=slot_f["hora_inicio"],
-            duracao_min=DURACAO_CONSULTA.get(local_familiar, 90),
-        )
-        atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO,
-                         data=data_familiar, hora=slot_f["hora_inicio"])
-        enviar_mensagem(phone,
-            f"🎉 Perfeito! Consulta de *{nome_familiar}* confirmada:\n\n"
-            f"📅 *{nome_dia_nf}, {data_familiar}*\n"
-            f"⏰ *{slot_f['hora_inicio']}*\n"
-            f"📍 *{local_familiar}*\n\n"
-            f"{msg.endereco_para_local(local_familiar)}\n\n"
-            f"Qualquer dúvida, é só chamar! 😊"
-        )
-        enviar_mensagem(VICTOR_PHONE,
-            f"📌 *Consulta de familiar confirmada!*\n\n"
-            f"👤 *Familiar:* {nome_familiar}\n"
-            f"📞 *Telefone do responsável:* {phone} ({nome_salvo})\n"
-            f"📍 *Local:* {local_familiar}\n"
-            f"📅 *Data:* {data_familiar}\n"
-            f"⏰ *Horário:* {slot_f['hora_inicio']}"
-        )
-
-    # ── CONFIRMACAO DE VALOR
-    elif etapa == ESTADO_AGUARDA_CONFIRMACAO_VALOR:
-        confirmado = detectar_confirmacao(texto)
-
-        # Recupera contexto salvo
-        try:
-            buffer_v       = _json.loads(registro.get("hora", "{}"))
-            etapa_anterior = buffer_v.get("_etapa_anterior", ESTADO_AGUARDA_LOCAL)
-            local_anterior = buffer_v.get("_local_anterior", local) or local
-        except Exception:
-            etapa_anterior = ESTADO_AGUARDA_LOCAL
-            local_anterior = local
-
-        if confirmado is True:
-            # Recupera opcao_submenu salva (se existir)
-            opcao_sub = buffer_v.get("_opcao_submenu")
-
-            # Caso especial: paciente estava em AGUARDA_SUBMENU, já tinha respondido
-            # a opcao do submenu na mesma mensagem que perguntou o valor, e já tem local.
-            # Ex: "retorno. quanto custa?" → ao confirmar, pula submenu e vai para turno.
-            if (etapa_anterior == ESTADO_AGUARDA_SUBMENU
-                    and opcao_sub in ("1", "2")
-                    and local_anterior):
-                atualizar_estado(row, etapa=ESTADO_AGUARDA_TURNO, local=local_anterior, hora="")
-                enviar_mensagem(phone, msg.PERGUNTA_TURNO)
-            else:
-                # Restaura estado anterior e manda mensagem correta
-                atualizar_estado(row, etapa=etapa_anterior, local=local_anterior, hora="")
-                msg_retomada = _mensagem_retomada_fluxo(etapa_anterior, local_anterior)
-                if msg_retomada:
-                    enviar_mensagem(phone, msg_retomada)
-                else:
-                    # Estado sem mensagem de retomada simples (ex: AGUARDA_HORARIO)
-                    enviar_mensagem(phone,
-                        "Ótimo! Pode continuar de onde estávamos. 😊"
-                    )
-        elif confirmado is False:
-            encaminhar_para_humano(phone, row, nome_salvo, texto)
-        else:
-            # Nao entendeu — repete a pergunta
-            enviar_mensagem(phone,
-                "Desculpe, não entendi. Vamos seguir com o agendamento? "
-                "Responda *SIM* para continuar ou *NÃO* para encerrar."
-            )
-
-    # ── DESCRICAO LIVRE
+    # ── DESCRIÇÃO LIVRE ───────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_DESCRICAO:
         from claude_nlu import processar_mensagem_livre
         resposta_claude = processar_mensagem_livre(texto)
         enviar_mensagem(phone, resposta_claude)
-        atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
+        ok = _atualizar_estado_seguro(phone, row, ESTADO_ATENDIMENTO_HUMANO)
+        if not ok:
+            logger.error(f"[{phone}] FALHA ao gravar ATENDIMENTO_HUMANO após descrição livre")
         enviar_mensagem(VICTOR_PHONE, msg.notif_outro(nome_salvo, phone, texto))
 
-    # ── MARINADAS
+    # ── MARINADAS ─────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_MARINADAS:
         logger.info(f"[{phone}] AGUARDA_MARINADAS — ignorando")
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
         return
 
-    # ── ATENDIMENTO HUMANO
+    # ── ATENDIMENTO HUMANO ────────────────────────────────────────────────────
     elif etapa == ESTADO_ATENDIMENTO_HUMANO:
         logger.info(f"[{phone}] ATENDIMENTO_HUMANO — bot silencioso")
         return
 
-    # ── ESTADO DESCONHECIDO
+    # ── ESTADO DESCONHECIDO ───────────────────────────────────────────────────
     else:
         logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando")
         atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO)
