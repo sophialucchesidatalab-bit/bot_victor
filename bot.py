@@ -24,6 +24,7 @@ from sheets_agenda import buscar_horarios, remover_horario_confirmado
 from zapi import enviar_mensagem, enviar_imagem
 from claude_nlu import (
     extrair_opcao_menu,
+    extrair_opcao_submenu as extrair_opcao_submenu_nlu,
     extrair_local_e_turno,
     extrair_local,
     extrair_turno,
@@ -260,7 +261,7 @@ def detectar_opcao_menu(t, texto_original=""):
     return None
 
 
-def detectar_opcao_submenu(t):
+def detectar_opcao_submenu(t, texto_original=""):
     if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
     if any(x in t for x in [
         # diretas
@@ -322,6 +323,13 @@ def detectar_opcao_submenu(t):
         # com erro de digitação
         "tenho duvida","queria tira uma duvida",
     ]): return "3"
+    # Fallback: Claude NLU para frases que o regex não cobriu
+    try:
+        opcao_nlu = extrair_opcao_submenu_nlu(texto_original if 'texto_original' in dir() else t)
+        if opcao_nlu:
+            return opcao_nlu
+    except Exception:
+        pass
     return None
 
 
@@ -906,7 +914,7 @@ def processar_mensagem(phone, nome, texto):
         # Ex: "retorno. quanto custa mesmo?" → opcao_submenu = "2"
         opcao_submenu_salva = None
         if etapa == ESTADO_AGUARDA_SUBMENU:
-            opcao_submenu_salva = detectar_opcao_submenu(texto_norm)
+            opcao_submenu_salva = detectar_opcao_submenu(texto_norm, texto)
 
         buffer_valor = _json.dumps({
             "_etapa_anterior": etapa,
@@ -949,7 +957,7 @@ def processar_mensagem(phone, nome, texto):
 
     # ── SUBMENU
     elif etapa == ESTADO_AGUARDA_SUBMENU:
-        opcao = detectar_opcao_submenu(texto_norm)
+        opcao = detectar_opcao_submenu(texto_norm, texto)
         if opcao == "3":
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
