@@ -231,7 +231,20 @@ def _mensagem_retomada_fluxo(etapa_anterior: str, local: str) -> str:
 # DETECCAO DE INTENCOES
 # ─────────────────────────────────────────────
 
+# Saudações puras — retorna None imediatamente sem chamar o Claude NLU
+# O bloco AGUARDA_OPCAO vai repetir o MENU_PRINCIPAL
+_SAUDACOES = {
+    "oi","ola","ola!","oi!","bom dia","boa tarde","boa noite",
+    "bom dia!","boa tarde!","boa noite!","oi tudo bem","ola tudo bem",
+    "hey","hello","hi","tudo bem","tudo bom","boa","salve","eai","e ai",
+    "opa","oie","oii","oiii","oi boa tarde","oi boa noite","oi bom dia",
+}
+
 def detectar_opcao_menu(t, texto_original=""):
+    # Saudacoes puras nao precisam chamar o Claude — retorna None direto
+    if t.strip() in _SAUDACOES:
+        return None
+
     try:
         opcao = extrair_opcao_menu(texto_original or t)
         if opcao:
@@ -875,7 +888,9 @@ def processar_mensagem(phone, nome, texto):
             atualizar_estado(row, etapa=ESTADO_AGUARDA_DESCRICAO)
             enviar_mensagem(phone, msg.PEDIR_DESCRICAO)
         else:
-            encaminhar_para_humano(phone, row, nome_salvo, texto)
+            # Nao reconheceu opcao — repete o menu (nao encaminha para humano)
+            # Ex: saudacoes como "bom dia", "oi" chegam aqui quando ja ha registro
+            enviar_mensagem(phone, msg.MENU_PRINCIPAL)
 
     # ── SUBMENU
     elif etapa == ESTADO_AGUARDA_SUBMENU:
