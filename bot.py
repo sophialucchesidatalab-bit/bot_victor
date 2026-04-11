@@ -242,22 +242,25 @@ _SAUDACOES = {
 }
 
 def detectar_opcao_menu(t, texto_original=""):
-    # Saudacoes puras nao precisam chamar o Claude — retorna None direto
+    # Saudacoes puras — retorna None imediatamente, sem custo de API
     if t.strip() in _SAUDACOES:
         return None
 
-    try:
-        opcao = extrair_opcao_menu(texto_original or t)
-        if opcao:
-            return opcao
-    except Exception:
-        pass
+    # Regex primeiro — custo zero, resposta instantânea
     if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
     if any(x in t for x in ["consul","acompanhamento","nutricional","nutri","retorno","agendar","agendamento","informacao","informacoes","primeira"]): return "1"
     if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
     if any(x in t for x in ["marinada","marinadas","tempero","produto"]): return "2"
     if t in ["3", "3️⃣"] or t.startswith("3"): return "3"
     if any(x in t for x in ["outro","outros","assunto","duvida","pergunta"]): return "3"
+
+    # Claude NLU apenas para frases não cobertas pelo regex
+    try:
+        opcao = extrair_opcao_menu(texto_original or t)
+        if opcao:
+            return opcao
+    except Exception:
+        pass
     return None
 
 
