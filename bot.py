@@ -262,11 +262,66 @@ def detectar_opcao_menu(t, texto_original=""):
 
 def detectar_opcao_submenu(t):
     if t in ["1", "1️⃣"] or t.startswith("1"): return "1"
-    if any(x in t for x in ["primeira","novo","nunca fui","primeira vez"]): return "1"
+    if any(x in t for x in [
+        # diretas
+        "primeira","novo","nunca fui","primeira vez","nunca consultei",
+        "nunca fiz","nunca passei","primeira consulta","paciente novo",
+        "novo paciente","nao tenho cadastro","nao sou cadastrado",
+        "quero comecar","quero iniciar","primeira visita",
+        # variações naturais
+        "nunca fiz consulta","nunca consultei antes","nunca passei com",
+        "nunca fui paciente","nao sou paciente ainda","nao sou paciente",
+        "quero comecar com","quero comecar acompanhamento",
+        "quero iniciar acompanhamento","queria comecar","queria iniciar",
+        "queria saber como comecar","queria marcar minha primeira",
+        "quero fazer minha primeira","quero marcar primeira",
+        "quero agendar primeira",
+        # com dúvida inicial sobre como funciona (primeira vez)
+        "como faco para comecar","como faco para marcar primeira",
+        "como funciona a primeira","como funciona consulta com",
+        # curtas / informais
+        "sou novo","novo aqui","quero comecar contigo",
+        "quero iniciar contigo","iniciar acompanhamento",
+        # com erro de digitação comum
+        "nunca fiz consuta","primeira consuta","quero comecar consuta",
+        "quero inicia acompanhamento",
+    ]): return "1"
     if t in ["2", "2️⃣"] or t.startswith("2"): return "2"
-    if any(x in t for x in ["retorno","voltar","ja fui","segunda"]): return "2"
+    if any(x in t for x in [
+        # diretas
+        "retorno","voltar","ja fui","segunda","acompanhamento",
+        "ja consultei","ja fiz consulta","ja passei","sou paciente",
+        "ja sou paciente","quero retornar","continuacao","continuar",
+        "dar continuidade","ja tenho cadastro","retornar",
+        # variações naturais
+        "ja consultei com","ja fiz consulta com","quero continuar acompanhamento",
+        "quero continuar com","quero voltar","quero voltar a consultar",
+        "quero voltar ao acompanhamento","quero retornar consulta",
+        "quero remarcar retorno","preciso marcar retorno",
+        "quero fazer retorno","quero agendar retorno",
+        "quero continuar tratamento","quero continuar plano",
+        "quero voltar consulta","reagendar retorno",
+        # curtas
+        "continuidade","voltar",
+        # com erro de digitação
+        "ja consutei","quero retorna","quero continua","retorno consulta",
+    ]): return "2"
     if t in ["3", "3️⃣"] or t.startswith("3"): return "3"
-    if any(x in t for x in ["outro","outros","informacao","duvida"]): return "3"
+    if any(x in t for x in [
+        # diretas
+        "outro","outros","informacao","duvida","outra coisa",
+        "outra duvida","outra pergunta","nao e sobre consulta",
+        "quero saber outra","tenho uma pergunta",
+        # variações naturais
+        "tenho uma duvida","queria tirar uma duvida","queria perguntar",
+        "posso tirar uma duvida","posso fazer uma pergunta",
+        "queria saber uma coisa","queria saber uma informacao",
+        "tem como me explicar",
+        # curtas
+        "pergunta","queria saber",
+        # com erro de digitação
+        "tenho duvida","queria tira uma duvida",
+    ]): return "3"
     return None
 
 
