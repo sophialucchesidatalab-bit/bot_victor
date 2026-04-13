@@ -546,6 +546,8 @@ def processar_mensagem(phone, nome, texto):
             if turnos_extraidos else ""
         )
 
+        # FIX 1: novos contatos entram em AGUARDA_SUBMENU (comportamento original mantido),
+        # mas agora o menu principal (AGUARDA_OPCAO) também é consistente com o reset.
         criar_registro(
             phone=phone,
             nome=nome,
@@ -608,6 +610,8 @@ def processar_mensagem(phone, nome, texto):
             return
 
         if opcao not in ("1", "2"):
+            # FIX 6: encaminha direto para humano — ENCAMINHAR_HUMANO já informa o cliente
+            logger.warning(f"[{phone}] AGUARDA_SUBMENU: opção não reconhecida='{texto}'")
             encaminhar_para_humano(phone, row, nome_salvo, texto)
             return
 
@@ -615,6 +619,7 @@ def processar_mensagem(phone, nome, texto):
 
         if opcao == "1":
             if local:
+                # FIX 3: gravar estado ANTES de enviar qualquer mensagem
                 enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
                 _enviar_slots_apos_submenu(phone, row, nome_salvo, local, turnos_pre)
             else:
@@ -622,7 +627,9 @@ def processar_mensagem(phone, nome, texto):
                 if not ok:
                     enviar_mensagem(phone, msg.INSTABILIDADE_TECNICA)
                     return
+                # FIX 2: enviar mensagens de info + pergunta de local (estavam faltando)
                 enviar_mensagem(phone, msg.INFO_PRIMEIRA_CONSULTA)
+                enviar_mensagem(phone, msg.PERGUNTA_LOCAL)
 
         elif opcao == "2":
             if local:
@@ -651,7 +658,6 @@ def processar_mensagem(phone, nome, texto):
                 local=local_detectado
             )
             if not ok:
-                # Falha de persistência: pede o local novamente sem encaminhar humano
                 logger.warning(f"[{phone}] AGUARDA_LOCAL: falha ao gravar local={local_detectado}, pedindo novamente")
                 enviar_mensagem(phone,
                     "Tive uma instabilidade técnica ao salvar sua escolha. 😕\n\n"
@@ -661,8 +667,6 @@ def processar_mensagem(phone, nome, texto):
                 return
             enviar_mensagem(phone, msg.PERGUNTA_TURNO)
         else:
-            # Não detectou local: repete a pergunta (máx 1 tentativa antes de ir para humano)
-            # Tenta via Claude se texto_norm tiver contexto suficiente
             logger.warning(f"[{phone}] AGUARDA_LOCAL: local não detectado no texto='{texto}'")
             enviar_mensagem(phone,
                 "Não consegui identificar o local. 😅\n\n"
@@ -683,7 +687,6 @@ def processar_mensagem(phone, nome, texto):
         )
 
         if not turnos_detectados:
-            # Não encaminha para humano imediatamente — repete a pergunta contextualmente
             logger.warning(f"[{phone}] AGUARDA_TURNO: nenhum turno detectado em '{texto}'")
             enviar_mensagem(phone,
                 "Não consegui identificar sua preferência de horário. 😅\n\n"
@@ -712,7 +715,6 @@ def processar_mensagem(phone, nome, texto):
             hora=_json.dumps(slots, ensure_ascii=False)
         )
         if not ok:
-            # Falha ao gravar: não envia a lista de slots pois o estado não foi salvo
             logger.error(f"[{phone}] AGUARDA_TURNO: falha ao gravar AGUARDA_HORARIO, pedindo turno novamente")
             enviar_mensagem(phone,
                 "Tive uma instabilidade técnica ao salvar sua preferência. 😕\n\n"
@@ -788,7 +790,6 @@ def processar_mensagem(phone, nome, texto):
         logger.info(f"[{phone}] AGUARDA_CONFIRMACAO: texto='{texto}' confirmado={confirmado}")
 
         if confirmado is None:
-            # Não encaminha para humano imediatamente — repete a pergunta
             logger.warning(f"[{phone}] AGUARDA_CONFIRMACAO: confirmação não detectada em '{texto}'")
             enviar_mensagem(phone,
                 "Não entendi sua resposta. 😅\n\n"
@@ -853,8 +854,14 @@ def processar_mensagem(phone, nome, texto):
 
     # ── MARINADAS ─────────────────────────────────────────────────────────────
     elif etapa == ESTADO_AGUARDA_MARINADAS:
-        logger.info(f"[{phone}] AGUARDA_MARINADAS — ignorando")
+        # FIX 5: enviar mensagem de fallback antes de silenciar
+        logger.info(f"[{phone}] AGUARDA_MARINADAS — estado legado, redirecionando")
         atualizar_estado(row, etapa=ESTADO_ATENDIMENTO_HUMANO)
+        enviar_mensagem(phone,
+            "Olá! 😊 Sua mensagem foi recebida e encaminhada para o Victor. "
+            "Ele entrará em contato em breve!"
+        )
+        enviar_mensagem(VICTOR_PHONE, msg.notif_nao_entendeu(nome_salvo, phone, texto))
         return
 
     # ── ATENDIMENTO HUMANO ────────────────────────────────────────────────────
@@ -864,6 +871,7 @@ def processar_mensagem(phone, nome, texto):
 
     # ── ESTADO DESCONHECIDO ───────────────────────────────────────────────────
     else:
-        logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando")
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO)
-        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
+        # FIX 4: alinhar reset com AGUARDA_SUBMENU (consistente com o fluxo de novos contatos)
+        logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando para SUBMENU")
+        atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
+        enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
