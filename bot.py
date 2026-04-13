@@ -546,16 +546,16 @@ def processar_mensagem(phone, nome, texto):
             if turnos_extraidos else ""
         )
 
-        # FIX 1: novos contatos entram em AGUARDA_SUBMENU (comportamento original mantido),
-        # mas agora o menu principal (AGUARDA_OPCAO) também é consistente com o reset.
+        # FIX 1: novos contatos entram em AGUARDA_OPCAO e recebem o menu principal.
+        # Local e turnos pré-extraídos são preservados no registro para uso posterior.
         criar_registro(
             phone=phone,
             nome=nome,
-            etapa=ESTADO_AGUARDA_SUBMENU,
+            etapa=ESTADO_AGUARDA_OPCAO,
             local=local_extraido or "",
             hora=hora_buffer,
         )
-        enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
+        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
         return
 
     etapa      = registro.get("etapa", ESTADO_AGUARDA_OPCAO)
@@ -871,7 +871,7 @@ def processar_mensagem(phone, nome, texto):
 
     # ── ESTADO DESCONHECIDO ───────────────────────────────────────────────────
     else:
-        # FIX 4: alinhar reset com AGUARDA_SUBMENU (consistente com o fluxo de novos contatos)
-        logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando para SUBMENU")
-        atualizar_estado(row, etapa=ESTADO_AGUARDA_SUBMENU)
-        enviar_mensagem(phone, msg.SUBMENU_CONSULTA)
+        # FIX 4: reset consistente com o fluxo de novos contatos → AGUARDA_OPCAO
+        logger.warning(f"[{phone}] Estado desconhecido '{etapa}' — reiniciando para OPCAO")
+        atualizar_estado(row, etapa=ESTADO_AGUARDA_OPCAO)
+        enviar_mensagem(phone, msg.MENU_PRINCIPAL)
